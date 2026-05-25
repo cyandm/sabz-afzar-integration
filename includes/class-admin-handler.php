@@ -19,7 +19,7 @@ class SAI_Admin_Handler
     {
         add_menu_page(
             'Sabz Afzar Integration',
-            'Sabz Afzar Integration',
+            'همگام سازی سبز',
             'manage_woocommerce',
             'sabz-afzar-integration',
             [$this, 'render_dashboard'],

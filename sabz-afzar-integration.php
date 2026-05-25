@@ -1,10 +1,10 @@
 <?php
 
 /**
- * Plugin Name: Sabz Afzar Integration
- * Description: WooCommerce integration for Sabz Afzar Aria Web Services (Greenware API)
+ * Plugin Name: همگام سازی سبز
+ * Description: همگام سازی محصولات، ساخت حساب کاربری و فاکتور در نرم افزار حسابداری سبز
  * Version: 1.0.0
- * Author: Cyan Dm
+ * Author: Amirali Dizabadi
  * Text Domain: sabz-afzar-integration
  */
 
