@@ -5,8 +5,8 @@ if (!defined('ABSPATH')) {
 
 class SAI_Woo_Integration
 {
-    const SIZE_ATTRIBUTE_NAME = 'سایز';
-    const COLOR_ATTRIBUTE_NAME = 'رنگ';
+    const SIZE_ATTRIBUTE_NAME = 'size';
+    const COLOR_ATTRIBUTE_NAME = 'color';
 
     private $api;
 
@@ -624,10 +624,29 @@ class SAI_Woo_Integration
                 continue;
             }
 
+            $taxonomy = wc_attribute_taxonomy_name($attribute_name);
+            // مثلا pa_رنگ
+
+            // ساخت term اگر وجود ندارد
+            foreach ($attribute_options as $value) {
+                if (!term_exists($value, $taxonomy)) {
+                    wp_insert_term($value, $taxonomy);
+                }
+            }
+
+            // گرفتن term IDs
+            $term_ids = [];
+            foreach ($attribute_options as $value) {
+                $term = get_term_by('name', $value, $taxonomy);
+                if ($term) {
+                    $term_ids[] = (int) $term->term_id;
+                }
+            }
+
             $attribute = new WC_Product_Attribute();
-            $attribute->set_id(0);
-            $attribute->set_name($attribute_name);
-            $attribute->set_options($attribute_options);
+            $attribute->set_id(wc_attribute_taxonomy_id_by_name($attribute_name));
+            $attribute->set_name($taxonomy);
+            $attribute->set_options($term_ids);
             $attribute->set_position($attribute_position);
             $attribute->set_visible(true);
             $attribute->set_variation(true);
@@ -680,7 +699,13 @@ class SAI_Woo_Integration
                 continue;
             }
 
-            $variation_attributes[$this->get_attribute_key($attribute_name)] = $attribute_value;
+            $taxonomy = wc_attribute_taxonomy_name($attribute_name);
+
+            $term = get_term_by('name', $attribute_value, $taxonomy);
+
+            if ($term) {
+                $variation_attributes[$taxonomy] = $term->slug;
+            }
         }
 
         if (empty($variation_attributes)) {
