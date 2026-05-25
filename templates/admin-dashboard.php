@@ -1,0 +1,123 @@
+<?php
+if (!defined('ABSPATH')) {
+    exit;
+}
+?>
+<div class="wrap sai-admin-wrap">
+    <div class="sai-header">
+        <p>همگام سازی سبز افزار</p>
+        <span>مدیریت همگام‌سازی API سبز افزار، قیمت‌گذاری، موجودی، مشتریان و فاکتورها.</span>
+    </div>
+
+    <?php if (!empty($_GET['saved'])) : ?>
+        <div class="notice notice-success is-dismissible">
+            <p>تنظیمات با موفقیت ذخیره شد.</p>
+        </div>
+    <?php endif; ?>
+
+    <div class="sai-grid">
+        <div class="sai-card">
+            <p class="title">تنظیمات اتصال</p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <input type="hidden" name="action" value="sai_save_settings">
+                <?php wp_nonce_field('sai_save_settings_nonce'); ?>
+
+                <div class="sai-field">
+                    <label for="sai_api_base_url">آدرس برای ارسال درخواست پایه</label>
+                    <input type="text" id="sai_api_base_url" name="sai_api_base_url" value="<?php echo esc_attr(get_option('sai_api_base_url', 'http://localhost:4217')); ?>">
+                </div>
+
+                <div class="sai-field">
+                    <label for="sai_fixed_token">توکن</label>
+                    <input type="text" id="sai_fixed_token" name="sai_fixed_token" value="<?php echo esc_attr(get_option('sai_fixed_token', '')); ?>">
+                </div>
+
+                <div class="sai-field">
+                    <label for="sai_branch_code">کد شعبه</label>
+                    <input type="text" id="sai_branch_code" name="sai_branch_code" value="<?php echo esc_attr(get_option('sai_branch_code', '')); ?>">
+                </div>
+
+                <p class="title">تغییر ویژگی</p>
+
+                <div class="sai-toggle-row">
+                    <span>همگام سازی مشتریان</span>
+                    <label class="sai-switch">
+                        <input type="checkbox" name="sai_enable_customer_sync" <?php checked(get_option('sai_enable_customer_sync', 'yes'), 'yes'); ?>>
+                        <span class="sai-slider"></span>
+                    </label>
+                </div>
+
+                <div class="sai-toggle-row">
+                    <span>ساخت فاکتور</span>
+                    <label class="sai-switch">
+                        <input type="checkbox" name="sai_enable_factor_creation" <?php checked(get_option('sai_enable_factor_creation', 'yes'), 'yes'); ?>>
+                        <span class="sai-slider"></span>
+                    </label>
+                </div>
+
+                <div class="sai-toggle-row">
+                    <span>همگام سازی قیمت</span>
+                    <label class="sai-switch">
+                        <input type="checkbox" name="sai_enable_price_sync" <?php checked(get_option('sai_enable_price_sync', 'yes'), 'yes'); ?>>
+                        <span class="sai-slider"></span>
+                    </label>
+                </div>
+
+                <div class="sai-toggle-row">
+                    <span>همگام سازی موجودی</span>
+                    <label class="sai-switch">
+                        <input type="checkbox" name="sai_enable_stock_sync" <?php checked(get_option('sai_enable_stock_sync', 'yes'), 'yes'); ?>>
+                        <span class="sai-slider"></span>
+                    </label>
+                </div>
+
+                <div class="sai-toggle-row">
+                    <span>همگام سازی اتوماتیک</span>
+                    <label class="sai-switch">
+                        <input type="checkbox" name="sai_enable_auto_sync" <?php checked(get_option('sai_enable_auto_sync', 'no'), 'yes'); ?>>
+                        <span class="sai-slider"></span>
+                    </label>
+                </div>
+
+                <div class="sai-toggle-row" style="display: none;">
+                    <span>از نقطه پایانی فشرده استفاده کنید (لطفا این مورد فعال نشود)</span>
+                    <label class="sai-switch">
+                        <input type="checkbox" name="sai_use_compressed_endpoint" <?php checked(get_option('sai_use_compressed_endpoint', 'no'), 'yes'); ?>>
+                        <span class="sai-slider"></span>
+                    </label>
+                </div>
+
+                <div class="sai-field">
+                    <label for="sai_auto_sync_interval">فاصله همگام سازی خودکار</label>
+                    <select id="sai_auto_sync_interval" name="sai_auto_sync_interval">
+                        <option value="hourly" <?php selected(get_option('sai_auto_sync_interval', 'hourly'), 'hourly'); ?>>هر یک ساعت</option>
+                        <option value="twicedaily" <?php selected(get_option('sai_auto_sync_interval', 'hourly'), 'twicedaily'); ?>>دو بار در روز</option>
+                        <option value="daily" <?php selected(get_option('sai_auto_sync_interval', 'hourly'), 'daily'); ?>>روزی یک بار</option>
+                    </select>
+                </div>
+
+                <div class="sai-field">
+                    <label for="sai_price_unit">واحد قیمت</label>
+                    <select id="sai_price_unit" name="sai_price_unit">
+                        <option value="rial" <?php selected(get_option('sai_price_unit', 'rial'), 'rial'); ?>>ریال</option>
+                        <option value="toman" <?php selected(get_option('sai_price_unit', 'rial'), 'toman'); ?>>تومان</option>
+                    </select>
+                    <p class="description">اگر در سایت شما قیمت ها به ریال و یا تومان تنظیم شده است لطفا این قسمت هم گزینه متناسب با تنظیمات را انتخاب کنید.</p>
+                </div>
+
+                <div class="sai-actions">
+                    <button type="submit" class="button button-primary">ذخیره تنظیمات</button>
+                    <button type="button" class="button" id="sai-test-connection">بررسی ارتباط</button>
+                    <button type="button" class="button" id="sai-manual-sync">شروع درون ریزی و آپدیت محصولات</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="sai-card">
+            <p class="title">وضعیت</p>
+            <div id="sai-ajax-result">
+                <p>از دکمه ها برای آزمایش دسترسی به API یا شروع همگام سازی محصول استفاده کنید.</p>
+            </div>
+        </div>
+    </div>
+</div>
