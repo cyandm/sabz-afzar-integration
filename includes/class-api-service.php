@@ -154,6 +154,11 @@ class SAI_API_Service
 
     public function add_customer($args = [])
     {
+        $national_code = $args['nationalCode'] ?? '';
+        if ($national_code === '') {
+            $national_code = '0';
+        }
+
         $query = http_build_query([
             'firstName'          => $args['firstName'] ?? '',
             'lastName'           => $args['lastName'] ?? '',
@@ -161,21 +166,12 @@ class SAI_API_Service
             'email'              => $args['email'] ?? '',
             'introducerMobileNo' => $args['introducerMobileNo'] ?? '',
             'isMale'             => !empty($args['isMale']) ? 'true' : 'false',
-            'nationalCode'       => $args['nationalCode'] ?? '',
+            'nationalCode'       => $national_code,
         ]);
 
         $endpoint = 'api/linkJSONEShopAddCustomer?' . $query;
 
         return $this->request('POST', $endpoint, null);
-    }
-
-    /**
-     * ایجاد فاکتور فروش موقت
-     * ساختار payload باید مطابق FactorDocTransModel باشد
-     */
-    public function add_factor($payload = [])
-    {
-        return $this->request('POST', 'api/LinkJSONEShopAddFactor', $payload);
     }
 
     /**

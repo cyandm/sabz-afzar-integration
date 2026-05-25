@@ -61,6 +61,7 @@ final class Sabz_Afzar_Integration
     {
         $defaults = [
             'sai_branch_code'              => '',
+            'sai_location_code'            => '',
             'sai_api_base_url'             => 'http://localhost:4217',
             'sai_fixed_token'              => 'PUT_YOUR_STATIC_TOKEN_HERE',
             'sai_enable_customer_sync'     => 'yes',
@@ -78,9 +79,27 @@ final class Sabz_Afzar_Integration
             }
         }
 
-        // ثبت کرون جاب هنگام فعال‌سازی افزونه
+        self::schedule_product_sync_cron();
+    }
+
+    /**
+     * زمان‌بندی کرون همگام‌سازی محصولات بر اساس تنظیمات ادمین
+     */
+    public static function schedule_product_sync_cron(): void
+    {
+        wp_clear_scheduled_hook('sai_hourly_product_sync');
+
+        if (get_option('sai_enable_auto_sync', 'yes') !== 'yes') {
+            return;
+        }
+
+        $interval = get_option('sai_auto_sync_interval', 'hourly');
+        if (!in_array($interval, ['hourly', 'twicedaily', 'daily'], true)) {
+            $interval = 'hourly';
+        }
+
         if (!wp_next_scheduled('sai_hourly_product_sync')) {
-            wp_schedule_event(time(), 'hourly', 'sai_hourly_product_sync');
+            wp_schedule_event(time(), $interval, 'sai_hourly_product_sync');
         }
     }
 
@@ -99,6 +118,11 @@ final class Sabz_Afzar_Integration
      */
     public function run_cron_product_sync()
     {
+        if (get_option('sai_enable_auto_sync', 'yes') !== 'yes') {
+            error_log('[SAI_CRON] Auto sync disabled in settings, skipping.');
+            return;
+        }
+
         error_log('[SAI_CRON] Hourly product sync started at ' . date('Y-m-d H:i:s'));
 
         if (!class_exists('WooCommerce')) {

@@ -37,6 +37,12 @@ if (!defined('ABSPATH')) {
                     <input type="text" id="sai_branch_code" name="sai_branch_code" value="<?php echo esc_attr(get_option('sai_branch_code', '')); ?>">
                 </div>
 
+                <div class="sai-field">
+                    <label for="sai_location_code">کد انبار (LocationCode)</label>
+                    <input type="text" id="sai_location_code" name="sai_location_code" value="<?php echo esc_attr(get_option('sai_location_code', '')); ?>">
+                    <p class="description">برای فاکتور تایید شده. اگر خالی باشد از کد شعبه استفاده می‌شود.</p>
+                </div>
+
                 <p class="title">تغییر ویژگی</p>
 
                 <div class="sai-toggle-row">

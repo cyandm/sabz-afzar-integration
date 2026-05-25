@@ -69,6 +69,7 @@ class SAI_Admin_Handler
         check_admin_referer('sai_save_settings_nonce');
 
         update_option('sai_branch_code', sanitize_text_field($_POST['sai_branch_code'] ?? ''));
+        update_option('sai_location_code', sanitize_text_field($_POST['sai_location_code'] ?? ''));
         update_option('sai_api_base_url', esc_url_raw($_POST['sai_api_base_url'] ?? ''));
         update_option('sai_fixed_token', sanitize_text_field($_POST['sai_fixed_token'] ?? ''));
 
@@ -86,6 +87,8 @@ class SAI_Admin_Handler
                 ? $_POST['sai_price_unit']
                 : 'rial'
         );
+
+        Sabz_Afzar_Integration::schedule_product_sync_cron();
 
         wp_safe_redirect(admin_url('admin.php?page=sabz-afzar-integration&saved=1'));
         exit;
