@@ -152,24 +152,26 @@ class SAI_API_Service
         return $this->request('POST', $endpoint, $normalized);
     }
 
+    /**
+     * QueryString مشتری مطابق فرمت API: email=null و introducerMobileNo=''
+     */
+    private function build_customer_query_string(array $args): string
+    {
+        $is_male = !empty($args['isMale']) ? 'true' : 'false';
+
+        return implode('&', [
+            'firstName=' . rawurlencode((string) ($args['firstName'] ?? '')),
+            'lastName=' . rawurlencode((string) ($args['lastName'] ?? '')),
+            'mobileNo=' . rawurlencode(trim((string) ($args['mobileNo'] ?? ''))),
+            'email=null',
+            "introducerMobileNo=''",
+            'isMale=' . $is_male,
+        ]);
+    }
+
     public function add_customer($args = [])
     {
-        $national_code = $args['nationalCode'] ?? '';
-        if ($national_code === '') {
-            $national_code = '0';
-        }
-
-        $query = http_build_query([
-            'firstName'          => $args['firstName'] ?? '',
-            'lastName'           => $args['lastName'] ?? '',
-            'mobileNo'           => $args['mobileNo'] ?? '',
-            'email'              => $args['email'] ?? '',
-            'introducerMobileNo' => $args['introducerMobileNo'] ?? '',
-            'isMale'             => !empty($args['isMale']) ? 'true' : 'false',
-            'nationalCode'       => $national_code,
-        ]);
-
-        $endpoint = 'api/linkJSONEShopAddCustomer?' . $query;
+        $endpoint = 'api/linkJSONEShopAddCustomer?' . $this->build_customer_query_string($args);
 
         return $this->request('POST', $endpoint, null);
     }

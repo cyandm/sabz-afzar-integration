@@ -44,8 +44,13 @@ class SAI_Order_Sync
      */
     private function extract_api_id($response): ?int
     {
-        if (is_array($response) && isset($response['Id'])) {
-            return (int) $response['Id'];
+        if (is_array($response)) {
+            if (isset($response['PersonId'])) {
+                return (int) $response['PersonId'];
+            }
+            if (isset($response['Id'])) {
+                return (int) $response['Id'];
+            }
         }
 
         if (is_numeric($response)) {
@@ -55,15 +60,58 @@ class SAI_Order_Sync
         return null;
     }
 
-    private function normalize_mobile(string $mobile): string
+    /**
+     * فقط ارقام؛ بدون تغییر طول یا حذف صفر
+     */
+    private function sanitize_mobile_digits(string $mobile): string
     {
-        $mobile = preg_replace('/\D+/', '', $mobile) ?? '';
+        return preg_replace('/\D+/', '', $mobile) ?? '';
+    }
 
-        if (strlen($mobile) === 10 && isset($mobile[0]) && $mobile[0] === '9') {
-            $mobile = '0' . $mobile;
+    /**
+     * موبایل برای API (mobileNo و PersonId): بدون صفر اول
+     * 09302365110 → 9302365110 | 9302365110 → 9302365110
+     */
+    private function mobile_without_leading_zero(string $mobile): string
+    {
+        $digits = $this->sanitize_mobile_digits($mobile);
+
+        if ($digits === '') {
+            return '';
         }
 
-        return $mobile;
+        if (strlen($digits) === 11 && isset($digits[0]) && $digits[0] === '0') {
+            $digits = substr($digits, 1);
+        }
+
+        return ctype_digit($digits) ? $digits : '';
+    }
+
+    private function mobile_to_person_id(string $mobile): ?int
+    {
+        $key = $this->mobile_without_leading_zero($mobile);
+
+        if ($key === '') {
+            return null;
+        }
+
+        return (int) $key;
+    }
+
+    /**
+     * موبایل خام سفارش (فقط ارقام) — سازگار با یوزرنیم OTP بدون صفر اول
+     */
+    private function get_order_billing_mobile(WC_Order $order): string
+    {
+        $user_id = $order->get_user_id();
+
+        if ($user_id > 0) {
+            return $this->sanitize_mobile_digits(
+                (string) (get_user_meta($user_id, 'billing_phone', true) ?: $order->get_billing_phone())
+            );
+        }
+
+        return $this->sanitize_mobile_digits((string) $order->get_billing_phone());
     }
 
     /**
@@ -124,27 +172,23 @@ class SAI_Order_Sync
         $user_id = $order->get_user_id();
 
         if ($user_id > 0) {
-            return [
-                'firstName'          => (string) get_user_meta($user_id, 'first_name', true),
-                'lastName'           => (string) get_user_meta($user_id, 'last_name', true),
-                'mobileNo'           => $this->normalize_mobile(
-                    (string) (get_user_meta($user_id, 'billing_phone', true) ?: $order->get_billing_phone())
-                ),
-                'email'              => (string) (get_user_meta($user_id, 'billing_email', true) ?: $order->get_billing_email()),
-                'introducerMobileNo' => '',
-                'isMale'             => false,
-                'nationalCode'       => '0',
-            ];
+            $first_name = (string) get_user_meta($user_id, 'first_name', true);
+            $last_name  = (string) get_user_meta($user_id, 'last_name', true);
+            $mobile     = $this->mobile_without_leading_zero(
+                (string) (get_user_meta($user_id, 'billing_phone', true) ?: $order->get_billing_phone())
+            );
+        } else {
+            $first_name = (string) $order->get_billing_first_name();
+            $last_name  = (string) $order->get_billing_last_name();
+            $mobile     = $this->mobile_without_leading_zero((string) $order->get_billing_phone());
         }
 
+        // email و introducerMobileNo در SAI_API_Service::build_customer_query_string تنظیم می‌شوند
         return [
-            'firstName'          => (string) $order->get_billing_first_name(),
-            'lastName'           => (string) $order->get_billing_last_name(),
-            'mobileNo'           => $this->normalize_mobile((string) $order->get_billing_phone()),
-            'email'              => (string) $order->get_billing_email(),
-            'introducerMobileNo' => '',
-            'isMale'             => false,
-            'nationalCode'       => '0',
+            'firstName' => $first_name,
+            'lastName'  => $last_name,
+            'mobileNo'  => $mobile,
+            'isMale'    => true,
         ];
     }
 
@@ -174,6 +218,11 @@ class SAI_Order_Sync
 
     private function get_cached_person_id(WC_Order $order): ?int
     {
+        $from_mobile = $this->mobile_to_person_id($this->get_order_billing_mobile($order));
+        if ($from_mobile !== null) {
+            return $from_mobile;
+        }
+
         $order_person_id = (int) $order->get_meta(self::META_PERSON_ID, true);
         if ($order_person_id > 0) {
             return $order_person_id;
@@ -202,21 +251,26 @@ class SAI_Order_Sync
 
     private function resolve_person_id(WC_Order $order): ?int
     {
-        $cached = $this->get_cached_person_id($order);
-        if ($cached !== null) {
-            $this->log('Using cached PersonId ' . $cached . ' for order ' . $order->get_id());
-            return $cached;
-        }
+        $person_id = $this->mobile_to_person_id($this->get_order_billing_mobile($order));
 
-        if (!$this->is_customer_sync_enabled()) {
+        if ($person_id === null) {
+            $this->log('PersonId could not be derived from mobile for order ' . $order->get_id());
             return null;
         }
 
-        $person_id = $this->send_customer_to_api($this->build_customer_payload($order));
+        if ($this->is_customer_sync_enabled()) {
+            $api_person_id = $this->send_customer_to_api($this->build_customer_payload($order));
 
-        if ($person_id !== null) {
-            $this->persist_person_id($order, $person_id);
+            if ($api_person_id !== null) {
+                $this->log(
+                    'add_customer API PersonId ' . $api_person_id .
+                    ' (factor uses mobile-based PersonId ' . $person_id . ')'
+                );
+            }
         }
+
+        $this->persist_person_id($order, $person_id);
+        $this->log('Using PersonId from mobile (no leading zero): ' . $person_id);
 
         return $person_id;
     }
