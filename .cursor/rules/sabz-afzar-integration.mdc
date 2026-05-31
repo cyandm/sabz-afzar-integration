@@ -1,0 +1,105 @@
+---
+description: Sabz Afzar WooCommerce product import, variation grouping, and remediation
+globs: wp-content/plugins/sabz-afzar-integration/**/*
+alwaysApply: false
+---
+
+# Sabz Afzar Integration — Product Import
+
+## Import pipeline
+
+1. `fetch_and_cache_products()` — API → `build_variation_groups()` → `uploads/sai-cache/products.json`
+2. `sync_products_from_cache_batch()` — processes jobs in batches (variable jobs first, then simple)
+3. Entry points: WP cron, `cron-sync.php`, admin manual sync
+
+Core file: `includes/class-woo-integration.php`
+
+## Variation grouping rules
+
+Items become **WooCommerce variations** when:
+
+- `GoodGroupCode` is not empty
+- Name parses to color and/or size via `extract_variation_data()`
+
+A group may contain **one or more** variations (single-color and single-size products are valid variable products).
+
+Items stay **simple** when:
+
+- `GoodGroupCode` is empty
+- Name does not parse to a recognizable color or size suffix
+
+### Group key (important)
+
+When `promote_color` is true, all siblings share one group key:
+
+```
+{GoodGroupCode}|color|{normalized_base_name}
+```
+
+Color-only and color+size items must **not** be split into separate groups (`color` vs `color-size`).
+
+Size-only groups (no color promotion) still use:
+
+```
+{GoodGroupCode}|size|{normalized_base_name}
+```
+
+### Parent SKU
+
+```
+sai-parent-{sanitize_key(GoodGroupCode)}-{md5(normalize_grouping_name(base_name))}
+```
+
+Variation SKU = `GoodCode`.
+
+## Name parsing
+
+### Size (`extract_size_variation`)
+
+Supported suffixes:
+
+- `سایز 3`, `سایز3`, `سایز  M` (optional space after سایز)
+- Standalone trailing size: `... M`, `... 3`, `... XL`
+
+Sizes: `0-4`, `S`, `M`, `L`, `XL`, `2XL`, `3XL`, `4XL`
+
+### Color (`extract_color_variation`)
+
+Trailing color suffix from hardcoded list in `get_color_suffixes()` (longest match first). Examples: مشکی، شیری، سدری، سرمه‌ای، ...
+
+Persian normalization: ی/ک, NBSP, half-space in compound colors, trailing `*` marker stripped.
+
+## WooCommerce attributes
+
+Global attributes required: `pa_color`, `pa_size` (constants `COLOR_ATTRIBUTE_NAME`, `SIZE_ATTRIBUTE_NAME`).
+
+## Remediation
+
+`remediate_orphan_simple_variations()` converts published **simple** products that:
+
+- Have `_sai_group_code` meta
+- Parse as a valid variation name
+- Match an existing **variable** parent via `get_parent_sku()`
+
+Admin: **همگام سازی سبز** → **تبدیل variationهای جاافتاده**
+
+Recommended order after code changes:
+
+1. Full manual sync (re-groups with fixed logic)
+2. Remediation button (fixes remaining orphans)
+
+Retired simple products: `draft` status, SKU `old-{GoodCode}`, meta `_sai_replaced_by_variation`.
+
+## Logging
+
+Search PHP error log for `[SAI_SYNC]`:
+
+- `VARIABLE CREATED/UPDATED` — parent
+- `VARIATION CREATED/UPDATED` — variation
+- `Retired simple product for variation` — migration
+- `Remediated orphan simple to variation` — remediation
+- `Job skipped` / `Variation skipped` — errors
+
+## When adding colors
+
+Add new Persian color suffixes to `get_color_suffixes()` in `class-woo-integration.php` (longer compound colors before shorter ones; list is sorted by length descending).

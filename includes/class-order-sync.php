@@ -69,7 +69,7 @@ class SAI_Order_Sync
     }
 
     /**
-     * موبایل برای API (mobileNo و PersonId): بدون صفر اول
+     * mobileNo در AddCustomer: بدون صفر اول
      * 09302365110 → 9302365110 | 9302365110 → 9302365110
      */
     private function mobile_without_leading_zero(string $mobile): string
@@ -87,41 +87,28 @@ class SAI_Order_Sync
         return ctype_digit($digits) ? $digits : '';
     }
 
-    private function mobile_to_person_id(string $mobile): ?int
-    {
-        $key = $this->mobile_without_leading_zero($mobile);
-
-        if ($key === '') {
-            return null;
-        }
-
-        return (int) $key;
-    }
-
     /**
-     * موبایل خام سفارش (فقط ارقام) — سازگار با یوزرنیم OTP بدون صفر اول
+     * زمان واقعی (UTC unix) برای تاریخ/ساعت — نه current_time('timestamp') که آفست را دوبار می‌زند.
      */
-    private function get_order_billing_mobile(WC_Order $order): string
+    private function get_issue_unix_timestamp(WC_Order $order): int
     {
-        $user_id = $order->get_user_id();
-
-        if ($user_id > 0) {
-            return $this->sanitize_mobile_digits(
-                (string) (get_user_meta($user_id, 'billing_phone', true) ?: $order->get_billing_phone())
-            );
+        $created = $order->get_date_created();
+        if ($created instanceof WC_DateTime) {
+            return $created->getTimestamp();
         }
 
-        return $this->sanitize_mobile_digits((string) $order->get_billing_phone());
+        return time();
     }
 
     /**
      * تبدیل تاریخ میلادی به شمسی (فرمت Y/m/d مطابق مستندات API)
+     * تاریخ میلادی از timezone سایت وردپرس (مثلاً تهران)
      */
-    private function to_jalali_date(int $timestamp): string
+    private function to_jalali_date(int $utc_timestamp): string
     {
-        $g_y = (int) date('Y', $timestamp);
-        $g_m = (int) date('n', $timestamp);
-        $g_d = (int) date('j', $timestamp);
+        $g_y = (int) wp_date('Y', $utc_timestamp);
+        $g_m = (int) wp_date('n', $utc_timestamp);
+        $g_d = (int) wp_date('j', $utc_timestamp);
 
         $g_days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
         $j_days_in_month = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29];
@@ -162,6 +149,43 @@ class SAI_Order_Sync
         $jd = $j_day_no + 1;
 
         return sprintf('%04d/%02d/%02d', $jy, $jm, $jd);
+    }
+
+    /**
+     * مطابق Postman: new Date().toISOString() → UTC با میلی‌ثانیه و پسوند Z
+     * مثال: 2026-05-26T11:45:36.000Z
+     */
+    private function format_issue_datetime_for_api(int $utc_timestamp): string
+    {
+        $dt = new DateTime('@' . $utc_timestamp);
+        $dt->setTimezone(new DateTimeZone('UTC'));
+
+        return $dt->format('Y-m-d\TH:i:s.v\Z');
+    }
+
+    /**
+     * ساعت محلی سایت برای IssueTime (مثلاً 16:11 وقتی UTC همان لحظه 12:41 است)
+     */
+    private function format_issue_time_for_api(int $utc_timestamp): string
+    {
+        return wp_date('H:i:s', $utc_timestamp);
+    }
+
+    /**
+     * تبدیل مبلغ ووکامرس به واحد API (هماهنگ با sai_price_unit در همگام‌سازی محصول)
+     */
+    private function convert_amount_for_api(float $amount): float
+    {
+        if (get_option('sai_price_unit', 'rial') === 'toman') {
+            return round($amount * 10, 2);
+        }
+
+        return round($amount, 2);
+    }
+
+    private function is_cash_payment(WC_Order $order): bool
+    {
+        return in_array($order->get_payment_method(), ['cod', 'bacs', 'cheque'], true);
     }
 
     /**
@@ -213,26 +237,74 @@ class SAI_Order_Sync
 
         $this->log('add_customer response', is_array($response) ? $response : ['raw' => $response]);
 
+        return $this->extract_api_person_id($response);
+    }
+
+    /**
+     * PersonId برگشتی از AddCustomer (شناسه داخلی سبز افزار، نه موبایل)
+     *
+     * @param mixed $response
+     */
+    private function extract_api_person_id($response): ?int
+    {
+        if (is_array($response) && isset($response['PersonId'])) {
+            return (int) $response['PersonId'];
+        }
+
         return $this->extract_api_id($response);
+    }
+
+    /**
+     * کش قدیمی افزونه گاهی موبایل را به‌جای PersonId API ذخیره کرده — نامعتبر است.
+     */
+    private function is_stale_mobile_person_id(int $person_id, WC_Order $order): bool
+    {
+        $mobile_no = $this->build_customer_payload($order)['mobileNo'] ?? '';
+        if ($mobile_no === '') {
+            return false;
+        }
+
+        return $person_id === (int) $mobile_no;
+    }
+
+    private function clear_person_id_cache(WC_Order $order): void
+    {
+        $order->delete_meta_data(self::META_PERSON_ID);
+
+        $user_id = $order->get_user_id();
+        if ($user_id > 0) {
+            delete_user_meta($user_id, self::USER_META_PERSON_ID);
+        }
     }
 
     private function get_cached_person_id(WC_Order $order): ?int
     {
-        $from_mobile = $this->mobile_to_person_id($this->get_order_billing_mobile($order));
-        if ($from_mobile !== null) {
-            return $from_mobile;
-        }
-
         $order_person_id = (int) $order->get_meta(self::META_PERSON_ID, true);
         if ($order_person_id > 0) {
-            return $order_person_id;
+            if ($this->is_stale_mobile_person_id($order_person_id, $order)) {
+                $this->log(
+                    'Ignoring stale cached PersonId ' . $order_person_id .
+                        ' on order ' . $order->get_id() . ' (was saved as mobile, not API id)'
+                );
+                $this->clear_person_id_cache($order);
+            } else {
+                return $order_person_id;
+            }
         }
 
         $user_id = $order->get_user_id();
         if ($user_id > 0) {
             $user_person_id = (int) get_user_meta($user_id, self::USER_META_PERSON_ID, true);
             if ($user_person_id > 0) {
-                return $user_person_id;
+                if ($this->is_stale_mobile_person_id($user_person_id, $order)) {
+                    $this->log(
+                        'Ignoring stale cached PersonId ' . $user_person_id .
+                            ' on user ' . $user_id . ' (was saved as mobile, not API id)'
+                    );
+                    delete_user_meta($user_id, self::USER_META_PERSON_ID);
+                } else {
+                    return $user_person_id;
+                }
             }
         }
 
@@ -251,28 +323,34 @@ class SAI_Order_Sync
 
     private function resolve_person_id(WC_Order $order): ?int
     {
-        $person_id = $this->mobile_to_person_id($this->get_order_billing_mobile($order));
+        $cached = $this->get_cached_person_id($order);
+        if ($cached !== null) {
+            $this->log('Using cached API PersonId ' . $cached . ' for order ' . $order->get_id());
+            return $cached;
+        }
 
-        if ($person_id === null) {
-            $this->log('PersonId could not be derived from mobile for order ' . $order->get_id());
+        if (!$this->is_customer_sync_enabled()) {
+            $this->log('PersonId missing for order ' . $order->get_id() . ': customer sync is disabled.');
             return null;
         }
 
-        if ($this->is_customer_sync_enabled()) {
-            $api_person_id = $this->send_customer_to_api($this->build_customer_payload($order));
-
-            if ($api_person_id !== null) {
-                $this->log(
-                    'add_customer API PersonId ' . $api_person_id .
-                    ' (factor uses mobile-based PersonId ' . $person_id . ')'
-                );
-            }
+        $payload = $this->build_customer_payload($order);
+        if ($payload['mobileNo'] === '') {
+            $this->log('PersonId missing for order ' . $order->get_id() . ': billing phone is empty.');
+            return null;
         }
 
-        $this->persist_person_id($order, $person_id);
-        $this->log('Using PersonId from mobile (no leading zero): ' . $person_id);
+        $api_person_id = $this->send_customer_to_api($payload);
 
-        return $person_id;
+        if ($api_person_id === null) {
+            $this->log('PersonId missing for order ' . $order->get_id() . ': add_customer did not return PersonId.');
+            return null;
+        }
+
+        $this->persist_person_id($order, $api_person_id);
+        $this->log('Using API PersonId for hist factor: ' . $api_person_id);
+
+        return $api_person_id;
     }
 
     /**
@@ -292,20 +370,17 @@ class SAI_Order_Sync
             $subtotal = (float) $item->get_subtotal();
             $total    = (float) $item->get_total();
 
-            $unit_price   = $quantity > 0 ? round($subtotal / $quantity, 2) : 0.0;
+            $unit_price   = $quantity > 0 ? $this->convert_amount_for_api($subtotal / $quantity) : 0.0;
             $discount_pct = $subtotal > 0 ? round((($subtotal - $total) / $subtotal) * 100, 2) : 0.0;
 
-            $good_id = 0;
-            if ($product) {
-                $meta_good_id = $product->get_meta('_sai_good_id', true);
-                if ($meta_good_id !== '' && is_numeric($meta_good_id)) {
-                    $good_id = (int) $meta_good_id;
-                }
+            $good_code = $product ? (string) $product->get_sku() : '';
+            if ($good_code === '') {
+                continue;
             }
 
+            // مطابق Postman نمونه HistFactor: فقط GoodCode (بدون GoodId)
             $details[] = [
-                'GoodId'          => $good_id,
-                'GoodCode'        => $product ? (string) $product->get_sku() : '',
+                'GoodCode'        => $good_code,
                 'Quantity'        => $quantity,
                 'UnitPrice'       => $unit_price,
                 'DiscountPercent' => $discount_pct,
@@ -323,11 +398,9 @@ class SAI_Order_Sync
      */
     private function build_hist_factor_payload(WC_Order $order, int $person_id): array
     {
-        $timestamp = (int) current_time('timestamp');
-        $total     = (float) $order->get_total();
-
-        $payment_method = $order->get_payment_method();
-        $is_cash        = in_array($payment_method, ['cod', 'bacs', 'cheque'], true);
+        $timestamp = $this->get_issue_unix_timestamp($order);
+        $total     = $this->convert_amount_for_api((float) $order->get_total());
+        $is_cash   = $this->is_cash_payment($order);
 
         $location_code = (string) get_option('sai_location_code', '');
         if ($location_code === '') {
@@ -338,16 +411,16 @@ class SAI_Order_Sync
             'DocNo'                => (string) $order->get_id(),
             'PersonId'             => $person_id,
             'IssueDate'            => $this->to_jalali_date($timestamp),
-            'IssueTime'            => date('H:i:s', $timestamp),
+            'IssueTime'            => $this->format_issue_time_for_api($timestamp),
             'Comment'              => sprintf('WooCommerce Order #%d', $order->get_id()),
             'TotalPrice'           => $total,
-            'DiscountAmount'       => (float) $order->get_discount_total(),
+            'DiscountAmount'       => $this->convert_amount_for_api((float) $order->get_discount_total()),
             'UserDiscount'         => 0.0,
-            'VAT'                  => (float) $order->get_total_tax(),
+            'VAT'                  => $this->convert_amount_for_api((float) $order->get_total_tax()),
             'Toll'                 => 0.0,
             'CreditCardAmount'     => $is_cash ? 0.0 : $total,
             'PayAmount'            => $is_cash ? $total : 0.0,
-            'IssueDateTime'        => date('c', $timestamp),
+            'IssueDateTime'        => $this->format_issue_datetime_for_api($timestamp),
             'LocationCode'         => $location_code,
             'histFactorDocDetails' => $this->build_hist_factor_details($order),
         ];

@@ -233,7 +233,7 @@ class SAI_Woo_Integration
         $name = $this->strip_grouping_marker($good_name);
         $sizes = '(0|1|2|3|4|[234]?XL|S|M|L)';
 
-        if (preg_match('/^(.*?)\s+سایز\s+' . $sizes . '$/iu', $name, $matches)) {
+        if (preg_match('/^(.*?)\s+سایز\s*' . $sizes . '$/iu', $name, $matches)) {
             return [
                 'base_name' => $this->normalize_persian_text($matches[1]),
                 'size'      => $this->normalize_size_value($matches[2]),
@@ -301,6 +301,7 @@ class SAI_Woo_Integration
             'زرد',
             'کرم',
             'بژ',
+            'سدری',
         ];
 
         $colors = array_map([$this, 'normalize_persian_text'], $colors);
@@ -368,7 +369,6 @@ class SAI_Woo_Integration
     private function build_variation_groups(array $items)
     {
         $records = [];
-        $color_families = [];
 
         foreach ($items as $item) {
             if (!is_array($item)) {
@@ -380,24 +380,12 @@ class SAI_Woo_Integration
             $group_name = isset($item['GoodGroupName']) ? sanitize_text_field($item['GoodGroupName']) : '';
             $variation = $this->extract_variation_data($good_name);
 
-            $record = [
+            $records[] = [
                 'item'       => $item,
                 'group_code' => $group_code,
                 'group_name' => $group_name,
                 'variation'  => $variation,
             ];
-
-            $records[] = $record;
-
-            if ($group_code !== '' && $variation['color'] !== null && $variation['color_base_name'] !== null) {
-                $family_key = $group_code . '|' . $this->normalize_grouping_name($variation['color_base_name']);
-
-                if (!isset($color_families[$family_key])) {
-                    $color_families[$family_key] = [];
-                }
-
-                $color_families[$family_key][$variation['color']] = true;
-            }
         }
 
         $candidate_groups = [];
@@ -421,12 +409,7 @@ class SAI_Woo_Integration
             $variation_attributes = [];
             $parent_name = '';
             $group_kind = '';
-            $promote_color = false;
-
-            if ($variation['color'] !== null && $variation['color_base_name'] !== null) {
-                $family_key = $group_code . '|' . $this->normalize_grouping_name($variation['color_base_name']);
-                $promote_color = isset($color_families[$family_key]) && count($color_families[$family_key]) > 1;
-            }
+            $promote_color = $variation['color'] !== null && $variation['color_base_name'] !== null;
 
             if ($promote_color) {
                 $parent_name = $variation['color_base_name'];
@@ -453,7 +436,10 @@ class SAI_Woo_Integration
             }
 
             $group_base_name = $this->normalize_grouping_name($parent_name);
-            $group_key = $group_code . '|' . $group_kind . '|' . $group_base_name;
+            // Color-family items share one group regardless of whether they also have a size.
+            $group_key = $promote_color
+                ? $group_code . '|color|' . $group_base_name
+                : $group_code . '|' . $group_kind . '|' . $group_base_name;
 
             if (!isset($candidate_groups[$group_key])) {
                 $candidate_groups[$group_key] = [
@@ -490,21 +476,7 @@ class SAI_Woo_Integration
         $jobs = [];
 
         foreach ($candidate_order as $group_key) {
-            $group = $candidate_groups[$group_key];
-
-            // Flat Sabz Afzar rows become WooCommerce variations only when
-            // multiple recognized attribute rows share the same group and cleaned name.
-            if (count($group['items']) < 2) {
-                foreach ($group['items'] as $variation_item) {
-                    $simple_jobs[] = [
-                        'type'  => 'simple',
-                        'items' => [$variation_item['item']],
-                    ];
-                }
-                continue;
-            }
-
-            $jobs[] = $group;
+            $jobs[] = $candidate_groups[$group_key];
         }
 
         return array_merge($jobs, $simple_jobs);
@@ -952,6 +924,8 @@ class SAI_Woo_Integration
         $this->apply_group_category($product, isset($item['GoodGroupName']) ? sanitize_text_field($item['GoodGroupName']) : '');
 
         $product->update_meta_data('_sai_good_id', isset($item['GoodId']) ? sanitize_text_field($item['GoodId']) : '');
+        $product->update_meta_data('_sai_good_code', $good_code);
+        $product->update_meta_data('_sai_original_name', $good_name);
         $product->update_meta_data('_sai_group_code', isset($item['GoodGroupCode']) ? sanitize_text_field($item['GoodGroupCode']) : '');
         $product->update_meta_data('_sai_group_name', isset($item['GoodGroupName']) ? sanitize_text_field($item['GoodGroupName']) : '');
         $product->update_meta_data('_sai_unit_name', isset($item['UnitName']) ? sanitize_text_field($item['UnitName']) : '');
@@ -962,5 +936,189 @@ class SAI_Woo_Integration
         error_log('[SAI_SYNC] ' . strtoupper($result_type) . ': SKU=' . $good_code . ' | Name=' . $good_name);
 
         return $result_type;
+    }
+
+    /**
+     * Convert published simple products that belong to an existing variable parent.
+     *
+     * @return array{converted:int,skipped:int,errors:array<int,string>}
+     */
+    public function remediate_orphan_simple_variations()
+    {
+        $converted = 0;
+        $skipped = 0;
+        $errors = [];
+
+        $product_ids = wc_get_products([
+            'status'   => 'publish',
+            'type'     => 'simple',
+            'limit'    => -1,
+            'return'   => 'ids',
+            'meta_query' => [
+                [
+                    'key'     => '_sai_group_code',
+                    'compare' => 'EXISTS',
+                ],
+            ],
+        ]);
+
+        if (!is_array($product_ids)) {
+            return [
+                'converted' => 0,
+                'skipped'   => 0,
+                'errors'    => ['Could not query simple products'],
+            ];
+        }
+
+        foreach ($product_ids as $product_id) {
+            $product = wc_get_product((int) $product_id);
+
+            if (!$product || !$product->is_type('simple')) {
+                $skipped++;
+                continue;
+            }
+
+            if ($product->get_meta('_sai_is_parent', true) === 'yes') {
+                $skipped++;
+                continue;
+            }
+
+            $good_code = sanitize_text_field($product->get_meta('_sai_good_code', true));
+
+            if ($good_code === '') {
+                $good_code = sanitize_text_field($product->get_sku());
+            }
+
+            if ($good_code === '') {
+                $skipped++;
+                continue;
+            }
+
+            $group_code = sanitize_text_field($product->get_meta('_sai_group_code', true));
+
+            if ($group_code === '') {
+                $skipped++;
+                continue;
+            }
+
+            $good_name = sanitize_text_field($product->get_meta('_sai_original_name', true));
+
+            if ($good_name === '') {
+                $good_name = sanitize_text_field($product->get_name());
+            }
+
+            $remediation = $this->build_remediation_variation_context($group_code, $good_name);
+
+            if ($remediation === null) {
+                $skipped++;
+                continue;
+            }
+
+            $parent_sku = $this->get_parent_sku($group_code, $remediation['parent_name']);
+            $parent_id = $this->find_product_id_by_sku($parent_sku);
+
+            if (!$parent_id) {
+                $skipped++;
+                continue;
+            }
+
+            $parent = wc_get_product($parent_id);
+
+            if (!$parent || !$parent->is_type('variable')) {
+                $skipped++;
+                continue;
+            }
+
+            $regular_price = (float) $product->get_regular_price();
+            $sale_price = $product->get_sale_price();
+            $discount = 0.0;
+
+            if ($sale_price !== '' && $regular_price > 0) {
+                $discount = max(0, 100 - (((float) $sale_price / $regular_price) * 100));
+            }
+
+            $sell_price = $regular_price;
+
+            if (get_option('sai_price_unit', 'rial') === 'toman') {
+                $sell_price = $regular_price * 10;
+            }
+
+            $variation_item = [
+                'item' => [
+                    'GoodCode'        => $good_code,
+                    'GoodName'        => $good_name,
+                    'GoodGroupCode'   => $group_code,
+                    'GoodGroupName'   => sanitize_text_field($product->get_meta('_sai_group_name', true)),
+                    'GoodId'          => sanitize_text_field($product->get_meta('_sai_good_id', true)),
+                    'UnitName'        => sanitize_text_field($product->get_meta('_sai_unit_name', true)),
+                    'SellPrice'       => $sell_price,
+                    'DiscountPercent' => $discount,
+                    'Quantity'        => $product->get_stock_quantity(),
+                ],
+                'attributes' => $remediation['attributes'],
+            ];
+
+            $result = $this->create_or_update_variation((int) $parent_id, $variation_item);
+
+            if (is_wp_error($result)) {
+                $errors[] = 'SKU ' . $good_code . ': ' . $result->get_error_message();
+                continue;
+            }
+
+            WC_Product_Variable::sync((int) $parent_id);
+            wc_delete_product_transients((int) $parent_id);
+            $converted++;
+
+            error_log('[SAI_SYNC] Remediated orphan simple to variation: SKU=' . $good_code . ' | Parent=' . $parent_sku);
+        }
+
+        error_log(
+            '[SAI_SYNC] Remediation finished | converted=' . $converted .
+                ' | skipped=' . $skipped .
+                ' | errors=' . count($errors)
+        );
+
+        return [
+            'converted' => $converted,
+            'skipped'   => $skipped,
+            'errors'    => $errors,
+        ];
+    }
+
+    /**
+     * @return array{parent_name:string,attributes:array<string,string>}|null
+     */
+    private function build_remediation_variation_context($group_code, $good_name)
+    {
+        $variation = $this->extract_variation_data($good_name);
+        $attributes = [];
+        $parent_name = '';
+
+        if ($variation['color'] !== null && $variation['color_base_name'] !== null) {
+            $parent_name = $variation['color_base_name'];
+            $attributes[self::COLOR_ATTRIBUTE_NAME] = $variation['color'];
+
+            if ($variation['size'] !== null) {
+                $attributes[self::SIZE_ATTRIBUTE_NAME] = $variation['size'];
+            }
+        } elseif ($variation['size'] !== null && $variation['size_base_name'] !== null) {
+            $parent_name = $variation['size_base_name'];
+            $attributes[self::SIZE_ATTRIBUTE_NAME] = $variation['size'];
+        }
+
+        if ($parent_name === '' || empty($attributes)) {
+            return null;
+        }
+
+        $parent_sku = $this->get_parent_sku($group_code, $parent_name);
+
+        if (!$this->find_product_id_by_sku($parent_sku)) {
+            return null;
+        }
+
+        return [
+            'parent_name' => $parent_name,
+            'attributes'  => $attributes,
+        ];
     }
 }

@@ -115,6 +115,7 @@ if (!defined('ABSPATH')) {
                     <button type="submit" class="button button-primary">ذخیره تنظیمات</button>
                     <button type="button" class="button" id="sai-test-connection">بررسی ارتباط</button>
                     <button type="button" class="button" id="sai-manual-sync">شروع درون ریزی و آپدیت محصولات</button>
+                    <button type="button" class="button" id="sai-remediate-variations">تبدیل variationهای جاافتاده</button>
                 </div>
             </form>
         </div>

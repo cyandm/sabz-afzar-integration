@@ -161,7 +161,6 @@ final class Sabz_Afzar_Integration
 
             $offset   = $result['next_offset'] ?? ($offset + $limit);
             $has_more = $result['has_more'] ?? false;
-
         } while ($has_more);
 
         error_log('[SAI_CRON] Hourly product sync finished. Batches: ' . $batch);

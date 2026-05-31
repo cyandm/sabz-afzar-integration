@@ -13,6 +13,7 @@ class SAI_Admin_Handler
 
         add_action('wp_ajax_sai_manual_sync', [$this, 'ajax_manual_sync']);
         add_action('wp_ajax_sai_test_connection', [$this, 'ajax_test_connection']);
+        add_action('wp_ajax_sai_remediate_variations', [$this, 'ajax_remediate_variations']);
     }
 
     public function register_menu()
@@ -145,5 +146,25 @@ class SAI_Admin_Handler
             'message' => 'Connection OK',
             'count'   => is_array($result) ? count($result) : 0,
         ]);
+    }
+
+    public function ajax_remediate_variations()
+    {
+        check_ajax_referer('sai_admin_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(['message' => 'Permission denied']);
+        }
+
+        $woo = new SAI_Woo_Integration();
+        $result = $woo->remediate_orphan_simple_variations();
+
+        error_log(
+            '[SAI_SYNC] Remediation AJAX finished | converted=' . ($result['converted'] ?? 0) .
+                ' | skipped=' . ($result['skipped'] ?? 0) .
+                ' | errors=' . count($result['errors'] ?? [])
+        );
+
+        wp_send_json_success($result);
     }
 }

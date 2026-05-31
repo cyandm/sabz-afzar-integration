@@ -56,7 +56,10 @@ jQuery(function ($) {
   }
 
   function setButtonsDisabled(disabled) {
-    $("#sai-manual-sync, #sai-test-connection").prop("disabled", disabled);
+    $("#sai-manual-sync, #sai-test-connection, #sai-remediate-variations").prop(
+      "disabled",
+      disabled,
+    );
   }
 
   $("#sai-test-connection").on("click", function () {
@@ -218,5 +221,87 @@ jQuery(function ($) {
     }
 
     runBatch();
+  });
+
+  $("#sai-remediate-variations").on("click", function () {
+    if (isSyncRunning) {
+      renderMessage("همگام‌سازی در حال انجام است. لطفاً تا پایان آن صبر کنید.", false);
+      return;
+    }
+
+    isSyncRunning = true;
+    setButtonsDisabled(true);
+    renderMessage("در حال تبدیل محصولات simple جاافتاده به variation...", true);
+
+    $.post(
+      saiAdmin.ajaxUrl,
+      {
+        action: "sai_remediate_variations",
+        nonce: saiAdmin.nonce,
+      },
+      function (response) {
+        isSyncRunning = false;
+        setButtonsDisabled(false);
+
+        if (!response || !response.success) {
+          renderMessage(
+            escapeHtml(
+              (response && response.data && response.data.message) ||
+                "عملیات remediation ناموفق بود",
+            ),
+            false,
+          );
+          return;
+        }
+
+        const data = response.data || {};
+        const errors = Array.isArray(data.errors) ? data.errors : [];
+        let message =
+          "تبدیل variationهای جاافتاده انجام شد" +
+          "<br>تبدیل شده: " +
+          escapeHtml(data.converted || 0) +
+          "<br>رد شده: " +
+          escapeHtml(data.skipped || 0);
+
+        if (errors.length > 0) {
+          message +=
+            "<br>خطاها (" +
+            escapeHtml(errors.length) +
+            "):<br>" +
+            errors
+              .slice(0, 10)
+              .map(function (error) {
+                return escapeHtml(error);
+              })
+              .join("<br>");
+
+          if (errors.length > 10) {
+            message += "<br>...";
+          }
+        }
+
+        renderMessage(message, errors.length === 0);
+      },
+    ).fail(function (xhr, status) {
+      isSyncRunning = false;
+      setButtonsDisabled(false);
+
+      let msg = "درخواست AJAX ناموفق بود";
+
+      if (status) {
+        msg += " (" + escapeHtml(status) + ")";
+      }
+
+      if (
+        xhr &&
+        xhr.responseJSON &&
+        xhr.responseJSON.data &&
+        xhr.responseJSON.data.message
+      ) {
+        msg += "<br>" + escapeHtml(xhr.responseJSON.data.message);
+      }
+
+      renderMessage(msg, false);
+    });
   });
 });
