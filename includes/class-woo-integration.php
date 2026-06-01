@@ -201,14 +201,81 @@ class SAI_Woo_Integration
     private function normalize_persian_text($text)
     {
         $text = (string) $text;
-        $text = str_replace(['ي', 'ك', "\xc2\xa0"], ['ی', 'ک', ' '], $text);
+
+        $text = str_replace(
+            [
+                'ي',
+                'ك',
+                'ة',
+                'ۀ',
+                'أ',
+                'إ',
+                'ؤ',
+                'ئ',
+                "\xc2\xa0",
+                "\xe2\x80\x89",
+                "\xe2\x80\x8a",
+                "\xe2\x80\xaf",
+                "\xe2\x80\x8b",
+                "\xef\xbb\xbf",
+            ],
+            [
+                'ی',
+                'ک',
+                'ه',
+                'ه',
+                'ا',
+                'ا',
+                'و',
+                'ی',
+                ' ',
+                ' ',
+                ' ',
+                ' ',
+                '',
+                '',
+            ],
+            $text
+        );
+
         $text = preg_replace('/\s+/u', ' ', $text);
         $text = preg_replace('/\s*‌\s*/u', '‌', $text);
-        $text = str_replace('سرمه ای', 'سرمه‌ای', $text);
-        $text = str_replace('قهوه ای', 'قهوه‌ای', $text);
-        $text = str_replace('نسکافه ای', 'نسکافه‌ای', $text);
+
+        foreach ($this->get_persian_compound_replacements() as $search => $replace) {
+            $text = str_replace($search, $replace, $text);
+        }
 
         return trim($text);
+    }
+
+    /**
+     * Common Persian compound words written with a space instead of half-space (ZWNJ).
+     *
+     * @return array<string, string>
+     */
+    private function get_persian_compound_replacements()
+    {
+        static $replacements = null;
+
+        if ($replacements !== null) {
+            return $replacements;
+        }
+
+        return $replacements = [
+            'سرمه ای'       => 'سرمه‌ای',
+            'قهوه ای'       => 'قهوه‌ای',
+            'نسکافه ای'     => 'نسکافه‌ای',
+            'پسته ای'       => 'پسته‌ای',
+            'فیروزه ای'     => 'فیروزه‌ای',
+            'نقره ای'       => 'نقره‌ای',
+            'مغز پسته ای'   => 'مغز پسته‌ای',
+            'پوست پیاز'     => 'پوست پیازی',
+            'رز گلد'        => 'رزگلد',
+            'کله غازی'      => 'کله‌غازی',
+            'آبی کله غازی'  => 'آبی کله‌غازی',
+            'سفید صدفی'     => 'سفید صدفی',
+            'مشکی مات'      => 'مشکی مات',
+        ];
     }
 
     private function normalize_grouping_name($text)
@@ -259,28 +326,83 @@ class SAI_Woo_Integration
         }
 
         $colors = [
+            // Multi-word (longest matches first after sort)
             'آبی کاربنی',
+            'آبی کله‌غازی',
+            'آبی آسمانی',
+            'آبی نفتی',
+            'آبی پاستیلی',
             'آبی روشن',
             'آبی تیره',
+            'آبی یخی',
+            'آبی فیروزه‌ای',
             'آجری روشن',
+            'آجری تیره',
             'زرد توسکانی',
             'زرد کهربایی',
+            'زرد لیمویی',
+            'زرد خردلی',
             'سبز جنگل',
+            'سبز ارتشی',
+            'سبز زیتونی',
+            'سبز پاستیلی',
             'سبز روشن',
             'سبز تیره',
-            'سبز ارتشی',
+            'سبز آلو',
+            'سبز نعنایی',
             'طوسی روشن',
+            'طوسی تیره',
+            'طوسی متوسط',
             'قهوه‌ای روشن',
             'قهوه‌ای تیره',
+            'قهوه‌ای متوسط',
             'سفید مشکی',
             'سفید دودی',
+            'سفید صدفی',
+            'سفید شیری',
+            'مشکی مات',
+            'مشکی براق',
+            'قرمز تیره',
+            'قرمز روشن',
+            'قرمز آجری',
+            'صورتی تیره',
+            'صورتی روشن',
+            'صورتی پاستیلی',
+            'بنفش تیره',
+            'بنفش روشن',
+            'نارنجی تیره',
+            'نارنجی روشن',
+            'کرم تیره',
+            'کرم روشن',
+            'خاکستری تیره',
+            'خاکستری روشن',
             'نوک مدادی',
+            'مغز پسته‌ای',
+            'پوست پیازی',
             'سرمه‌ای',
             'قهوه‌ای',
             'نسکافه‌ای',
+            'فیروزه‌ای',
+            'نقره‌ای',
             'شکلاتی',
             'زرشکی',
             'سرخابی',
+            'خرمایی',
+            'عنابی',
+            'زیتونی',
+            'نخودی',
+            'کالباسی',
+            'هلویی',
+            'گیلاسی',
+            'گلبهی',
+            'پسته‌ای',
+            'یاسی',
+            'آلویی',
+            'برنزی',
+            'زرین',
+            'مسی',
+            'اکری',
+            'پاستیلی',
             'صورتی',
             'نارنجی',
             'بنفش',
@@ -289,6 +411,8 @@ class SAI_Woo_Integration
             'رزگلد',
             'طلایی',
             'کاربنی',
+            'فیلی',
+            'خاکستری',
             'مشکی',
             'سفید',
             'خاکی',
@@ -302,6 +426,8 @@ class SAI_Woo_Integration
             'کرم',
             'بژ',
             'سدری',
+            'آجری',
+            'نعنایی',
         ];
 
         $colors = array_map([$this, 'normalize_persian_text'], $colors);
@@ -313,28 +439,237 @@ class SAI_Woo_Integration
         return $colors;
     }
 
+    /**
+     * @return list<string>
+     */
+    private function get_single_word_color_suffixes()
+    {
+        static $single_word_colors = null;
+
+        if ($single_word_colors !== null) {
+            return $single_word_colors;
+        }
+
+        $single_word_colors = [];
+
+        foreach ($this->get_color_suffixes() as $color) {
+            if (strpos($color, ' ') === false) {
+                $single_word_colors[] = $color;
+            }
+        }
+
+        return $single_word_colors;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function get_compound_color_suffixes()
+    {
+        static $compound_colors = null;
+
+        if ($compound_colors !== null) {
+            return $compound_colors;
+        }
+
+        $compound_colors = [];
+
+        foreach ($this->get_color_suffixes() as $color) {
+            if (strpos($color, ' ') !== false) {
+                $compound_colors[] = $color;
+            }
+        }
+
+        return $compound_colors;
+    }
+
+    private function is_single_word_color_token($token)
+    {
+        $token = $this->normalize_persian_text((string) $token);
+
+        if ($token === '') {
+            return false;
+        }
+
+        return in_array($token, $this->get_single_word_color_suffixes(), true);
+    }
+
+    /**
+     * @param list<string> $colors
+     * @return array{base_name:string,color:string}|null
+     */
+    private function try_extract_color_suffix_match($name, array $colors)
+    {
+        foreach ($colors as $color) {
+            $pattern = '/^(.*?)\s+' . preg_quote($color, '/') . '$/u';
+
+            if (!preg_match($pattern, $name, $matches)) {
+                continue;
+            }
+
+            $base_name = $this->normalize_persian_text($matches[1]);
+
+            if ($base_name === '') {
+                continue;
+            }
+
+            return [
+                'base_name' => $base_name,
+                'color'     => $color,
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{base_name:string,color:string}|null
+     */
+    private function try_extract_dual_color_variation($name)
+    {
+        $name = $this->normalize_persian_text($name);
+        $parts = preg_split('/\s+/u', $name, -1, PREG_SPLIT_NO_EMPTY);
+
+        if (!is_array($parts) || count($parts) < 2) {
+            return null;
+        }
+
+        $last_index = count($parts) - 1;
+        $color_second = $parts[$last_index];
+        $color_first = $parts[$last_index - 1];
+
+        if (!$this->is_single_word_color_token($color_first) || !$this->is_single_word_color_token($color_second)) {
+            return null;
+        }
+
+        $base_parts = array_slice($parts, 0, -2);
+
+        if ($base_parts === []) {
+            return null;
+        }
+
+        return [
+            'base_name' => implode(' ', $base_parts),
+            'color'     => $color_first . ' ' . $color_second,
+        ];
+    }
+
+    /**
+     * @param list<string> $tokens
+     */
+    private function match_inline_color_phrase(array $tokens)
+    {
+        $token_count = count($tokens);
+
+        if ($token_count === 0) {
+            return null;
+        }
+
+        $first = $this->normalize_persian_text($tokens[0]);
+
+        if ($first === 'یقه') {
+            if ($token_count === 2 && $this->is_single_word_color_token($tokens[1])) {
+                return 'یقه ' . $this->normalize_persian_text($tokens[1]);
+            }
+
+            if (
+                $token_count === 3
+                && $this->is_single_word_color_token($tokens[1])
+                && $this->is_single_word_color_token($tokens[2])
+            ) {
+                return 'یقه '
+                    . $this->normalize_persian_text($tokens[1])
+                    . ' '
+                    . $this->normalize_persian_text($tokens[2]);
+            }
+
+            return null;
+        }
+
+        if (
+            $token_count === 2
+            && $this->is_single_word_color_token($tokens[0])
+            && $this->is_single_word_color_token($tokens[1])
+        ) {
+            return $this->normalize_persian_text($tokens[0])
+                . ' '
+                . $this->normalize_persian_text($tokens[1]);
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{base_name:string,color:string}|null
+     */
+    private function try_extract_inline_color_variation($name)
+    {
+        $name = $this->normalize_persian_text($name);
+        $parts = preg_split('/\s+/u', $name, -1, PREG_SPLIT_NO_EMPTY);
+
+        if (!is_array($parts) || count($parts) < 3) {
+            return null;
+        }
+
+        $best_match = null;
+        $best_span_length = 0;
+
+        $part_count = count($parts);
+
+        for ($start = 0; $start < $part_count; $start++) {
+            for ($end = $start; $end < $part_count; $end++) {
+                $before = array_slice($parts, 0, $start);
+                $after = array_slice($parts, $end + 1);
+
+                if ($before === [] || $after === []) {
+                    continue;
+                }
+
+                $span_tokens = array_slice($parts, $start, $end - $start + 1);
+                $color = $this->match_inline_color_phrase($span_tokens);
+
+                if ($color === null) {
+                    continue;
+                }
+
+                $span_length = $end - $start + 1;
+
+                if ($span_length > $best_span_length) {
+                    $best_span_length = $span_length;
+                    $best_match = [
+                        'base_name' => implode(' ', array_merge($before, $after)),
+                        'color'     => $color,
+                    ];
+                }
+            }
+        }
+
+        return $best_match;
+    }
+
     private function extract_color_variation($good_name)
     {
         $name = $this->strip_grouping_marker($good_name);
 
-        foreach ($this->get_color_suffixes() as $color) {
-            $pattern = '/^(.*?)\s+' . preg_quote($color, '/') . '$/u';
+        $compound_match = $this->try_extract_color_suffix_match($name, $this->get_compound_color_suffixes());
 
-            if (preg_match($pattern, $name, $matches)) {
-                $base_name = $this->normalize_persian_text($matches[1]);
-
-                if ($base_name === '') {
-                    continue;
-                }
-
-                return [
-                    'base_name' => $base_name,
-                    'color'     => $color,
-                ];
-            }
+        if ($compound_match !== null) {
+            return $compound_match;
         }
 
-        return null;
+        $dual_match = $this->try_extract_dual_color_variation($name);
+
+        if ($dual_match !== null) {
+            return $dual_match;
+        }
+
+        $single_suffix_match = $this->try_extract_color_suffix_match($name, $this->get_single_word_color_suffixes());
+
+        if ($single_suffix_match !== null) {
+            return $single_suffix_match;
+        }
+
+        return $this->try_extract_inline_color_variation($name);
     }
 
     private function extract_variation_data($good_name)

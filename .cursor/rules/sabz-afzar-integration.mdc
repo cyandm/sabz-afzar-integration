@@ -65,9 +65,29 @@ Sizes: `0-4`, `S`, `M`, `L`, `XL`, `2XL`, `3XL`, `4XL`
 
 ### Color (`extract_color_variation`)
 
-Trailing color suffix from hardcoded list in `get_color_suffixes()` (longest match first). Examples: مشکی، شیری، سدری، سرمه‌ای، ...
+Match order (do not reorder without regression tests):
 
-Persian normalization: ی/ک, NBSP, half-space in compound colors, trailing `*` marker stripped.
+1. **Suffix — compound** colors from list (multi-word: `صورتی پاستیلی`, …) — longest first
+2. **Suffix — dual** — last two tokens both single-word colors → e.g. `صورتی بنفش`
+3. **Suffix — single-word** color at end
+4. **Inline (middle of name)** via `try_extract_inline_color_variation()` — only when tokens exist both before and after the color span:
+   - Dual inline: `تیشرت زرد سبز کاج` → parent `تیشرت کاج`, color `زرد سبز`
+   - Collar + color in `pa_color` (no separate attribute): `کفتان یقه زرد پرنده مهاجر` → parent `کفتان پرنده مهاجر`, color `یقه زرد`
+   - **Not supported:** single color in the middle only (e.g. `تیشرت قرمز کاج` → no parse)
+
+Examples:
+- `اسکارف ورزشی همه هیچ صورتی بنفش` → suffix dual, color `صورتی بنفش`
+- `تیشرت نارنجی بنفش کاج` → inline dual, parent `تیشرت کاج`
+
+Full list in `get_color_suffixes()` (70+ entries). Examples: مشکی، شیری، سدری، سرمه‌ای، فیلی، عنابی، …
+
+Persian normalization in `normalize_persian_text()`:
+- Arabic/Persian letter variants (ي→ی، ك→ک، …)
+- Unicode spaces and zero-width characters
+- Compound fixes via `get_persian_compound_replacements()` (e.g. `سرمه ای` → `سرمه‌ای`)
+- Trailing `*` marker stripped in `strip_grouping_marker()`
+
+When adding colors: use multi-word names before single-word; list is sorted by length descending automatically.
 
 ## WooCommerce attributes
 
