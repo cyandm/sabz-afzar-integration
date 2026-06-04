@@ -20,6 +20,13 @@
   display: grid;
   grid-template-columns: 2fr 1fr;
   gap: 20px;
+  align-items: start;
+}
+
+.sai-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .sai-card {
@@ -138,10 +145,179 @@
   flex-wrap: wrap;
 }
 
-#sai-ajax-result {
+#sai-ajax-result,
+#sai-report-result {
   background: #f9fafb;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   padding: 14px;
   min-height: 100px;
+}
+
+.sai-status-panel {
+  line-height: 1.8;
+}
+
+.sai-status-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.sai-status-progress-text {
+  font-size: 13px;
+  color: #475569;
+  margin-bottom: 10px;
+}
+
+.sai-status-progress-bar {
+  height: 10px;
+  background: #e5e7eb;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.sai-status-progress-fill {
+  height: 10px;
+  background: #2563eb;
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.sai-report-empty {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.8;
+}
+
+.sai-report-panel {
+  line-height: 1.8;
+}
+
+.sai-report-title {
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+
+.sai-report-stats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.sai-report-stats li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.sai-report-stats li span {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.sai-report-stats li strong {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.sai-report-stats .sai-stat-created {
+  border-color: #a7f3d0;
+  background: #ecfdf5;
+}
+
+.sai-report-stats .sai-stat-created strong {
+  color: #065f46;
+}
+
+.sai-report-stats .sai-stat-updated {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.sai-report-stats .sai-stat-updated strong {
+  color: #1e40af;
+}
+
+.sai-report-stats .sai-stat-skipped {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.sai-report-stats .sai-stat-skipped strong {
+  color: #9a3412;
+}
+
+.sai-report-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.7;
+}
+
+.sai-report-errors {
+  margin: 8px 0 0;
+  padding-right: 18px;
+  font-size: 12px;
+  color: #991b1b;
+}
+
+.sai-skip-log {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.sai-skip-log-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #9a3412;
+}
+
+.sai-skip-log-list {
+  margin: 0;
+  padding: 0 16px 0 0;
+  max-height: 220px;
+  overflow-y: auto;
+  list-style: disc;
+  font-size: 12px;
+  line-height: 1.75;
+  color: #334155;
+}
+
+.sai-skip-log-list li {
+  margin-bottom: 6px;
+}
+
+.sai-skip-log-code {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 4px;
+  color: #9a3412;
+  word-break: break-word;
+}
+
+.sai-skip-log-more {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: #64748b;
+}
+
+@media (max-width: 1200px) {
+  .sai-grid {
+    grid-template-columns: 1fr;
+  }
 }

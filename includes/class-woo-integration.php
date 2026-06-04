@@ -47,6 +47,7 @@ class SAI_Woo_Integration
         $file = $this->get_cache_file();
 
         $this->delete_cache_file();
+        SAI_Sync_Skip_Log::clear();
 
         error_log('[SAI_SYNC] Fetching fresh products from API...');
 
@@ -121,6 +122,8 @@ class SAI_Woo_Integration
 
         error_log('[SAI_SYNC] Cache batch started | offset=' . $offset . ' | limit=' . $limit);
 
+        SAI_Sync_Skip_Log::mark_batch_start();
+
         $jobs = $this->load_cached_products();
 
         if (empty($jobs)) {
@@ -142,6 +145,10 @@ class SAI_Woo_Integration
 
             if (is_wp_error($result)) {
                 $skipped++;
+                $this->record_skip(
+                    $result,
+                    is_array($job) ? $this->build_job_skip_context($job) : ['level' => 'job']
+                );
                 error_log('[SAI_SYNC] Job skipped: ' . $result->get_error_message());
                 continue;
             }
@@ -179,18 +186,65 @@ class SAI_Woo_Integration
                 ' | has_more=' . ($has_more ? 'yes' : 'no')
         );
 
+        $skip_log = SAI_Sync_Skip_Log::get_ui_payload();
+
         return [
-            'message'     => 'Batch processed successfully',
-            'created'     => $created,
-            'updated'     => $updated,
-            'skipped'     => $skipped,
-            'processed'   => $processed,
-            'total'       => $total,
-            'offset'      => $offset,
-            'limit'       => $limit,
-            'next_offset' => $next_offset,
-            'has_more'    => $has_more,
+            'message'          => 'Batch processed successfully',
+            'created'          => $created,
+            'updated'          => $updated,
+            'skipped'          => $skipped,
+            'processed'        => $processed,
+            'total'            => $total,
+            'offset'           => $offset,
+            'limit'            => $limit,
+            'next_offset'      => $next_offset,
+            'has_more'         => $has_more,
+            'skip_log_batch'   => $skip_log['skip_log_batch'],
+            'skip_log_total'   => $skip_log['skip_log_total'],
+            'skip_log_hidden'  => $skip_log['skip_log_hidden'],
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $job
+     * @return array<string, mixed>
+     */
+    private function build_job_skip_context(array $job): array
+    {
+        $type  = isset($job['type']) ? (string) $job['type'] : 'simple';
+        $items = isset($job['items']) && is_array($job['items']) ? $job['items'] : [];
+        $item  = [];
+
+        if ($type === 'variable') {
+            $first = reset($items);
+            if (is_array($first) && isset($first['item']) && is_array($first['item'])) {
+                $item = $first['item'];
+            }
+
+            return [
+                'level'       => 'job',
+                'item'        => $item,
+                'parent_name' => isset($job['parent_name']) ? sanitize_text_field((string) $job['parent_name']) : '',
+            ];
+        }
+
+        $first = reset($items);
+        if (is_array($first)) {
+            $item = isset($first['item']) && is_array($first['item']) ? $first['item'] : $first;
+        }
+
+        return [
+            'level' => 'simple',
+            'item'  => $item,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     */
+    private function record_skip(WP_Error $error, array $context = []): void
+    {
+        SAI_Sync_Skip_Log::append($error, $context);
     }
 
     public function sync_products_from_greenware_batch($offset = 0, $limit = 20)
@@ -856,6 +910,14 @@ class SAI_Woo_Integration
 
             if (is_wp_error($result)) {
                 $skipped++;
+                $item = is_array($variation_item) && isset($variation_item['item']) && is_array($variation_item['item'])
+                    ? $variation_item['item']
+                    : [];
+                $this->record_skip($result, [
+                    'level'       => 'variation',
+                    'item'        => $item,
+                    'parent_name' => isset($group['parent_name']) ? sanitize_text_field((string) $group['parent_name']) : '',
+                ]);
                 error_log('[SAI_SYNC] Variation skipped: ' . $result->get_error_message());
                 continue;
             }
@@ -932,20 +994,11 @@ class SAI_Woo_Integration
             }
 
             $taxonomy = wc_attribute_taxonomy_name($attribute_name);
-            // مثلا pa_رنگ
 
-            // ساخت term اگر وجود ندارد
-            foreach ($attribute_options as $value) {
-                if (!term_exists($value, $taxonomy)) {
-                    wp_insert_term($value, $taxonomy);
-                }
-            }
-
-            // گرفتن term IDs
             $term_ids = [];
             foreach ($attribute_options as $value) {
-                $term = get_term_by('name', $value, $taxonomy);
-                if ($term) {
+                $term = $this->get_or_create_attribute_term($attribute_name, $value);
+                if ($term instanceof WP_Term) {
                     $term_ids[] = (int) $term->term_id;
                 }
             }
@@ -997,6 +1050,7 @@ class SAI_Woo_Integration
         }
 
         $variation_attributes = [];
+        $missing_terms        = [];
 
         foreach ($attributes as $attribute_name => $attribute_value) {
             $attribute_name = sanitize_text_field($attribute_name);
@@ -1007,15 +1061,30 @@ class SAI_Woo_Integration
             }
 
             $taxonomy = wc_attribute_taxonomy_name($attribute_name);
+            $term     = $this->get_or_create_attribute_term($attribute_name, $attribute_value);
 
-            $term = get_term_by('name', $attribute_value, $taxonomy);
-
-            if ($term) {
+            if ($term instanceof WP_Term) {
                 $variation_attributes[$taxonomy] = $term->slug;
+            } else {
+                $missing_terms[$attribute_name] = is_wp_error($term)
+                    ? $term->get_error_message()
+                    : $attribute_value;
             }
         }
 
         if (empty($variation_attributes)) {
+            if (!empty($missing_terms)) {
+                $parts = [];
+                foreach ($missing_terms as $name => $value) {
+                    $parts[] = $name . ': ' . $value;
+                }
+
+                return new WP_Error(
+                    'sai_missing_wc_attribute_term',
+                    'Missing WC attribute terms: ' . implode(', ', $parts)
+                );
+            }
+
             return new WP_Error('sai_invalid_variation_item', 'Missing variation attributes');
         }
 
@@ -1126,6 +1195,257 @@ class SAI_Woo_Integration
     private function get_attribute_key($attribute_name)
     {
         return sanitize_title($attribute_name);
+    }
+
+    /**
+     * Ensure global WooCommerce attributes pa_color and pa_size exist (e.g. on plugin activate).
+     */
+    public function ensure_default_product_attributes(): void
+    {
+        if (!function_exists('wc_attribute_taxonomy_id_by_name')) {
+            return;
+        }
+
+        $color = $this->ensure_wc_global_attribute(self::COLOR_ATTRIBUTE_NAME);
+        $size  = $this->ensure_wc_global_attribute(self::SIZE_ATTRIBUTE_NAME);
+
+        if (is_wp_error($color)) {
+            error_log('[SAI_SYNC] Could not ensure color attribute: ' . $color->get_error_message());
+        }
+
+        if (is_wp_error($size)) {
+            error_log('[SAI_SYNC] Could not ensure size attribute: ' . $size->get_error_message());
+        }
+    }
+
+    /**
+     * @return int|WP_Error Attribute taxonomy ID.
+     */
+    private function ensure_wc_global_attribute(string $slug)
+    {
+        if (!in_array($slug, [self::COLOR_ATTRIBUTE_NAME, self::SIZE_ATTRIBUTE_NAME], true)) {
+            return new WP_Error('sai_invalid_attribute', 'Unsupported attribute slug: ' . $slug);
+        }
+
+        if (!function_exists('wc_attribute_taxonomy_id_by_name')) {
+            return new WP_Error('sai_wc_missing', 'WooCommerce attribute API is not available');
+        }
+
+        $attribute_id = wc_attribute_taxonomy_id_by_name($slug);
+        if ($attribute_id) {
+            return (int) $attribute_id;
+        }
+
+        if (!function_exists('wc_create_attribute')) {
+            return new WP_Error('sai_wc_missing', 'wc_create_attribute is not available');
+        }
+
+        $labels = [
+            self::COLOR_ATTRIBUTE_NAME => 'رنگ',
+            self::SIZE_ATTRIBUTE_NAME  => 'سایز',
+        ];
+
+        $created = wc_create_attribute([
+            'name'         => $labels[$slug],
+            'slug'         => $slug,
+            'type'         => 'select',
+            'order_by'     => 'menu_order',
+            'has_archives' => false,
+        ]);
+
+        if (is_wp_error($created)) {
+            return $created;
+        }
+
+        delete_transient('wc_attribute_taxonomies');
+
+        if (class_exists('WC_Cache_Helper')) {
+            WC_Cache_Helper::get_transient_version('product', true);
+        }
+
+        $this->register_attribute_taxonomy_if_needed($slug);
+
+        return (int) $created;
+    }
+
+    private function register_attribute_taxonomy_if_needed(string $slug): void
+    {
+        $taxonomy = wc_attribute_taxonomy_name($slug);
+
+        if (taxonomy_exists($taxonomy)) {
+            return;
+        }
+
+        register_taxonomy(
+            $taxonomy,
+            apply_filters('woocommerce_taxonomy_objects_' . $taxonomy, ['product']),
+            apply_filters(
+                'woocommerce_taxonomy_args_' . $taxonomy,
+                [
+                    'labels'       => [
+                        'name' => $slug,
+                    ],
+                    'hierarchical' => true,
+                    'show_ui'      => false,
+                    'query_var'    => true,
+                    'rewrite'      => false,
+                ]
+            )
+        );
+    }
+
+    /**
+     * Find or create a term under pa_color / pa_size (reuses existing; no duplicates).
+     *
+     * @return WP_Term|WP_Error
+     */
+    private function get_or_create_attribute_term(string $attribute_name, string $label)
+    {
+        $attribute_name = sanitize_text_field($attribute_name);
+        $label          = $this->normalize_persian_text(sanitize_text_field($label));
+
+        if ($attribute_name === '' || $label === '') {
+            return new WP_Error('sai_empty_attribute_term', 'Empty attribute name or term label');
+        }
+
+        if (!in_array($attribute_name, [self::COLOR_ATTRIBUTE_NAME, self::SIZE_ATTRIBUTE_NAME], true)) {
+            return new WP_Error('sai_invalid_attribute', 'Unsupported attribute: ' . $attribute_name);
+        }
+
+        $ensure = $this->ensure_wc_global_attribute($attribute_name);
+        if (is_wp_error($ensure)) {
+            return $ensure;
+        }
+
+        $taxonomy = wc_attribute_taxonomy_name($attribute_name);
+        $this->register_attribute_taxonomy_if_needed($attribute_name);
+
+        $existing = $this->find_existing_attribute_term($attribute_name, $label, $taxonomy);
+        if ($existing instanceof WP_Term) {
+            return $existing;
+        }
+
+        $inserted = wp_insert_term($label, $taxonomy);
+
+        if (is_wp_error($inserted)) {
+            if ($inserted->get_error_code() === 'term_exists') {
+                $resolved = $this->resolve_term_exists_error($inserted, $label, $taxonomy);
+                if ($resolved instanceof WP_Term) {
+                    return $resolved;
+                }
+            }
+
+            return new WP_Error(
+                'sai_term_create_failed',
+                $inserted->get_error_message(),
+                ['attribute' => $attribute_name, 'label' => $label]
+            );
+        }
+
+        if (!is_array($inserted) || !isset($inserted['term_id'])) {
+            return new WP_Error('sai_term_create_failed', 'Term insert returned invalid data');
+        }
+
+        $term = get_term((int) $inserted['term_id'], $taxonomy);
+
+        if (!$term instanceof WP_Term) {
+            return new WP_Error('sai_term_create_failed', 'Could not load term after insert');
+        }
+
+        return $term;
+    }
+
+    private function find_existing_attribute_term(string $attribute_name, string $label, string $taxonomy): ?WP_Term
+    {
+        $term = get_term_by('name', $label, $taxonomy);
+        if ($term instanceof WP_Term) {
+            return $term;
+        }
+
+        $exists = term_exists($label, $taxonomy);
+        if ($exists) {
+            $term_id = is_array($exists) ? (int) $exists['term_id'] : (int) $exists;
+            $term    = get_term($term_id, $taxonomy);
+            if ($term instanceof WP_Term && !is_wp_error($term)) {
+                return $term;
+            }
+        }
+
+        $slug = sanitize_title($label);
+        if ($slug !== '') {
+            $term = get_term_by('slug', $slug, $taxonomy);
+            if ($term instanceof WP_Term) {
+                return $term;
+            }
+        }
+
+        if ($attribute_name !== self::SIZE_ATTRIBUTE_NAME) {
+            return null;
+        }
+
+        $terms = get_terms([
+            'taxonomy'   => $taxonomy,
+            'hide_empty' => false,
+        ]);
+
+        if (is_wp_error($terms) || !is_array($terms)) {
+            return null;
+        }
+
+        $label_lower = strtolower($label);
+        $slug_lower  = strtolower($slug);
+
+        foreach ($terms as $candidate) {
+            if (!$candidate instanceof WP_Term) {
+                continue;
+            }
+
+            if (
+                strtolower($candidate->name) === $label_lower
+                || strtolower($candidate->slug) === $label_lower
+                || ($slug_lower !== '' && strtolower($candidate->slug) === $slug_lower)
+            ) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param WP_Error $error
+     */
+    private function resolve_term_exists_error(WP_Error $error, string $label, string $taxonomy): ?WP_Term
+    {
+        $data = $error->get_error_data('term_exists');
+        if ($data === null) {
+            $data = $error->get_error_data();
+        }
+
+        $term_id = 0;
+        if (is_numeric($data)) {
+            $term_id = (int) $data;
+        } elseif (is_array($data) && isset($data['term_id'])) {
+            $term_id = (int) $data['term_id'];
+        }
+
+        if ($term_id > 0) {
+            $term = get_term($term_id, $taxonomy);
+            if ($term instanceof WP_Term && !is_wp_error($term)) {
+                return $term;
+            }
+        }
+
+        $exists = term_exists($label, $taxonomy);
+        if ($exists) {
+            $term_id = is_array($exists) ? (int) $exists['term_id'] : (int) $exists;
+            $term    = get_term($term_id, $taxonomy);
+            if ($term instanceof WP_Term && !is_wp_error($term)) {
+                return $term;
+            }
+        }
+
+        return null;
     }
 
     private function get_or_create_product_category_id($group_name)

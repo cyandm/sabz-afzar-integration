@@ -91,7 +91,11 @@ When adding colors: use multi-word names before single-word; list is sorted by l
 
 ## WooCommerce attributes
 
-Global attributes required: `pa_color`, `pa_size` (constants `COLOR_ATTRIBUTE_NAME`, `SIZE_ATTRIBUTE_NAME`).
+Global attributes: `pa_color`, `pa_size` (`COLOR_ATTRIBUTE_NAME`, `SIZE_ATTRIBUTE_NAME`).
+
+- On plugin activate: `SAI_Woo_Integration::ensure_default_product_attributes()` → `wc_create_attribute` if missing.
+- During sync: `get_or_create_attribute_term( $attribute_name, $label )` — `normalize_persian_text`, lookup by name/slug/`term_exists`, size case-insensitive reuse, else `wp_insert_term` (handles `term_exists` duplicate).
+- Used in `create_or_update_variable_parent` and `create_or_update_variation` (single code path).
 
 ## Remediation
 
@@ -125,6 +129,15 @@ Search PHP error log for `[SAI_SYNC]`:
 - `Retired simple product for variation` — migration
 - `Remediated orphan simple to variation` — remediation
 - `Job skipped` / `Variation skipped` — errors
+
+### Skip log (admin + file)
+
+- Class: `includes/class-sync-skip-log.php` (`SAI_Sync_Skip_Log`)
+- File: `uploads/sai-cache/sync-skip-log.json` (same folder as `products.json`)
+- Cleared on each new manual sync start (`offset=0` in `ajax_manual_sync` and again in `fetch_and_cache_products`)
+- `SAI_Woo_Integration::record_skip()` appends on job/variation/simple failures; rare attribute failures use `sai_missing_wc_attribute_term` or `sai_term_create_failed`
+- Skip log UI: Persian line in `line_fa`; English `error_code` + `error_message` only in admin `<code>` (no duplicate in `format_line_fa`)
+- AJAX batch returns `skip_log_batch`, `skip_log_total`, `skip_log_hidden`; admin JS accumulates lines in the report panel (max 500 visible)
 
 ## When adding colors
 

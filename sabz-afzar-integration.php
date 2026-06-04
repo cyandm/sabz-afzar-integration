@@ -18,6 +18,7 @@ define('SAI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('SAI_PLUGIN_URL', plugin_dir_url(__FILE__));
 
 require_once SAI_PLUGIN_DIR . 'includes/class-api-service.php';
+require_once SAI_PLUGIN_DIR . 'includes/class-sync-skip-log.php';
 require_once SAI_PLUGIN_DIR . 'includes/class-admin-handler.php';
 require_once SAI_PLUGIN_DIR . 'includes/class-woo-integration.php';
 require_once SAI_PLUGIN_DIR . 'includes/class-order-sync.php';
@@ -80,6 +81,10 @@ final class Sabz_Afzar_Integration
         }
 
         self::schedule_product_sync_cron();
+
+        if (class_exists('WooCommerce') && class_exists('SAI_Woo_Integration')) {
+            (new SAI_Woo_Integration())->ensure_default_product_attributes();
+        }
     }
 
     /**

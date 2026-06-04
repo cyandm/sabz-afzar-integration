@@ -1,5 +1,7 @@
 jQuery(function ($) {
   let isSyncRunning = false;
+  let skipLogLines = [];
+  const SKIP_LOG_UI_MAX = 500;
 
   function escapeHtml(text) {
     return $("<div>")
@@ -19,40 +21,205 @@ jQuery(function ($) {
     );
   }
 
-  function renderProgress(stats) {
+  function resetReport() {
+    skipLogLines = [];
+    $("#sai-report-result").html(
+      '<p class="sai-report-empty">در حال آماده‌سازی همگام‌سازی…</p>',
+    );
+  }
+
+  function appendSkipLogBatch(batch) {
+    if (!Array.isArray(batch) || batch.length === 0) {
+      return;
+    }
+
+    batch.forEach(function (entry) {
+      if (!entry || !entry.line_fa) {
+        return;
+      }
+      skipLogLines.push(entry);
+    });
+  }
+
+  function renderSkipLogList(options) {
+    options = options || {};
+    const hidden = parseInt(options.skip_log_hidden || 0, 10);
+    const total = parseInt(
+      options.skip_log_total != null ? options.skip_log_total : skipLogLines.length,
+      10,
+    );
+
+    if (skipLogLines.length === 0) {
+      return "";
+    }
+
+    const displayLines = skipLogLines.slice(0, SKIP_LOG_UI_MAX);
+    let html =
+      '<div class="sai-skip-log">' +
+      '<p class="sai-skip-log-title">جزئیات رد شده (' +
+      escapeHtml(total) +
+      ")</p>" +
+      '<ul class="sai-skip-log-list">';
+
+    displayLines.forEach(function (entry) {
+      const code = entry.error_code || "";
+      const message = entry.error_message || "";
+      const english =
+        code + (code && message ? ": " : "") + (code ? message : message);
+
+      html +=
+        "<li>" +
+        escapeHtml(entry.line_fa) +
+        (english
+          ? ' <code dir="ltr" class="sai-skip-log-code">' +
+            escapeHtml(english) +
+            "</code>"
+          : "") +
+        "</li>";
+    });
+
+    html += "</ul>";
+
+    if (hidden > 0) {
+      html +=
+        '<p class="sai-skip-log-more">… و ' +
+        escapeHtml(hidden) +
+        " مورد دیگر در فایل لاگ</p>";
+    }
+
+    html += "</div>";
+
+    return html;
+  }
+
+  function renderReportStatRow(label, value, extraClass) {
+    const cls = extraClass ? ' class="' + extraClass + '"' : "";
+    return (
+      "<li" +
+      cls +
+      "><span>" +
+      escapeHtml(label) +
+      '</span><strong dir="ltr">' +
+      escapeHtml(value) +
+      "</strong></li>"
+    );
+  }
+
+  function renderReport(stats, options) {
+    options = options || {};
+    const mode = options.mode || "sync";
+    const finished = !!options.finished;
+
+    if (mode === "remediation") {
+      const errors = Array.isArray(options.errors) ? options.errors : [];
+      let html =
+        '<div class="sai-report-panel">' +
+        '<div class="sai-report-title">' +
+        escapeHtml(options.title || "گزارش تبدیل variation") +
+        "</div>" +
+        '<ul class="sai-report-stats">' +
+        renderReportStatRow(
+          "تبدیل شده",
+          stats.converted || 0,
+          "sai-stat-created",
+        ) +
+        renderReportStatRow(
+          "رد شده",
+          stats.skipped || 0,
+          "sai-stat-skipped",
+        );
+
+      if (errors.length > 0) {
+        html += renderReportStatRow(
+          "تعداد خطا",
+          errors.length,
+          "sai-stat-skipped",
+        );
+      }
+
+      html += "</ul>";
+
+      if (errors.length > 0) {
+        html +=
+          '<p class="sai-report-note">نمونه خطاها:</p><ul class="sai-report-errors">';
+        errors.slice(0, 5).forEach(function (err) {
+          html += "<li>" + escapeHtml(err) + "</li>";
+        });
+        if (errors.length > 5) {
+          html += "<li>…</li>";
+        }
+        html += "</ul>";
+      }
+
+      html += "</div>";
+      $("#sai-report-result").html(html);
+      return;
+    }
+
     const total = parseInt(stats.total || 0, 10);
     const processed = parseInt(stats.processed || 0, 10);
     const created = parseInt(stats.created || 0, 10);
     const updated = parseInt(stats.updated || 0, 10);
     const skipped = parseInt(stats.skipped || 0, 10);
 
+    const title = finished
+      ? "همگام‌سازی کامل شد"
+      : "در حال همگام‌سازی…";
+
+    let note = "";
+    if (finished && skipped > 0) {
+      note =
+        '<p class="sai-report-note">رد شده: job یا variationهایی که وارد نشدند (مثلاً attribute رنگ/سایز در ووکامرس پیدا نشد).</p>';
+    }
+
+    $("#sai-report-result").html(
+      '<div class="sai-report-panel">' +
+        '<div class="sai-report-title">' +
+        escapeHtml(title) +
+        "</div>" +
+        '<ul class="sai-report-stats">' +
+        renderReportStatRow("مجموع (job)", total) +
+        renderReportStatRow("پردازش‌شده", processed) +
+        renderReportStatRow("ساخته‌شده", created, "sai-stat-created") +
+        renderReportStatRow("آپدیت‌شده", updated, "sai-stat-updated") +
+        renderReportStatRow("رد شده", skipped, "sai-stat-skipped") +
+        "</ul>" +
+        note +
+        renderSkipLogList(options) +
+        "</div>",
+    );
+  }
+
+  function renderProgress(stats) {
+    const total = parseInt(stats.total || 0, 10);
+    const processed = parseInt(stats.processed || 0, 10);
+
     const percent =
       total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
 
     $("#sai-ajax-result").html(
-      '<div style="padding:12px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;">' +
-        '<div style="font-weight:600;margin-bottom:8px;">در حال همگام‌سازی محصولات...</div>' +
-        "<div>Processed: " +
-        processed +
+      '<div class="sai-status-panel">' +
+        '<div class="sai-status-title">در حال همگام‌سازی محصولات…</div>' +
+        '<div class="sai-status-progress-text">' +
+        escapeHtml(processed) +
         " / " +
-        total +
-        " (" +
-        percent +
+        escapeHtml(total) +
+        " job (" +
+        escapeHtml(percent) +
         "%)</div>" +
-        '<div style="margin-top:6px;">Created: ' +
-        created +
-        " | Updated: " +
-        updated +
-        " | Skipped: " +
-        skipped +
-        "</div>" +
-        '<div style="margin-top:10px;height:10px;background:#e5e7eb;border-radius:999px;overflow:hidden;">' +
-        '<div style="height:10px;width:' +
+        '<div class="sai-status-progress-bar">' +
+        '<div class="sai-status-progress-fill" style="width:' +
         percent +
-        '%;background:#2563eb;transition:width .25s ease;"></div>' +
+        '%;"></div>' +
         "</div>" +
         "</div>",
     );
+
+    renderReport(stats, {
+      finished: false,
+      skip_log_total: skipLogLines.length,
+      skip_log_hidden: Math.max(0, skipLogLines.length - SKIP_LOG_UI_MAX),
+    });
   }
 
   function setButtonsDisabled(disabled) {
@@ -179,6 +346,7 @@ jQuery(function ($) {
 
     isSyncRunning = true;
     setButtonsDisabled(true);
+    resetReport();
 
     let offset = 0;
     const limit = 20;
@@ -189,23 +357,35 @@ jQuery(function ($) {
     let updated = 0;
     let skipped = 0;
 
-    function finishSync(message, success) {
+    function getSyncStats() {
+      return {
+        total: total,
+        processed: processed,
+        created: created,
+        updated: updated,
+        skipped: skipped,
+      };
+    }
+
+    function finishSync(message, success, showFinalReport) {
       isSyncRunning = false;
       setButtonsDisabled(false);
       renderMessage(message, success);
+      if (showFinalReport) {
+        renderReport(getSyncStats(), {
+          finished: true,
+          skip_log_total: skipLogLines.length,
+          skip_log_hidden: Math.max(0, skipLogLines.length - SKIP_LOG_UI_MAX),
+        });
+      }
     }
 
     function runBatch() {
       if (offset === 0) {
         renderMessage("دریافت محصولات از API و ساخت حافظه پنهان...", true);
+        renderReport(getSyncStats(), { finished: false });
       } else {
-        renderProgress({
-          total: total,
-          processed: processed,
-          created: created,
-          updated: updated,
-          skipped: skipped,
-        });
+        renderProgress(getSyncStats());
       }
 
       $.post(
@@ -222,7 +402,7 @@ jQuery(function ($) {
               response && response.data && response.data.message
                 ? response.data.message
                 : "عدم همگام سازی";
-            finishSync(escapeHtml(errorMessage), false);
+            finishSync(escapeHtml(errorMessage), false, processed > 0 || created > 0);
             return;
           }
 
@@ -234,13 +414,17 @@ jQuery(function ($) {
           updated += parseInt(data.updated || 0, 10);
           skipped += parseInt(data.skipped || 0, 10);
 
-          renderProgress({
-            total: total,
-            processed: processed,
-            created: created,
-            updated: updated,
-            skipped: skipped,
-          });
+          appendSkipLogBatch(data.skip_log_batch);
+
+          renderProgress(getSyncStats());
+
+          if (data.skip_log_total != null) {
+            renderReport(getSyncStats(), {
+              finished: false,
+              skip_log_total: parseInt(data.skip_log_total, 10),
+              skip_log_hidden: parseInt(data.skip_log_hidden || 0, 10),
+            });
+          }
 
           if (data.has_more) {
             offset = parseInt(data.next_offset || offset + limit, 10);
@@ -252,20 +436,7 @@ jQuery(function ($) {
             return;
           }
 
-          finishSync(
-            "همگام سازی کامل شد" +
-              "<br>مجموع: " +
-              escapeHtml(total) +
-              "<br>پردازش شده: " +
-              escapeHtml(processed) +
-              "<br>ساخته شده: " +
-              escapeHtml(created) +
-              "<br>آپدیت شده: " +
-              escapeHtml(updated) +
-              "<br>رد شده: " +
-              escapeHtml(skipped),
-            true,
-          );
+          finishSync("همگام‌سازی با موفقیت تمام شد.", true, true);
         },
       ).fail(function (xhr, status) {
         let msg = "درخواست AJAX ناموفق یا منقضی شده است";
@@ -283,7 +454,7 @@ jQuery(function ($) {
           msg += "<br>" + escapeHtml(xhr.responseJSON.data.message);
         }
 
-        finishSync(msg, false);
+        finishSync(msg, false, processed > 0 || created > 0);
       });
     }
 
@@ -326,31 +497,25 @@ jQuery(function ($) {
 
         const data = response.data || {};
         const errors = Array.isArray(data.errors) ? data.errors : [];
-        let message =
-          "تبدیل variationهای جاافتاده انجام شد" +
-          "<br>تبدیل شده: " +
-          escapeHtml(data.converted || 0) +
-          "<br>رد شده: " +
-          escapeHtml(data.skipped || 0);
 
-        if (errors.length > 0) {
-          message +=
-            "<br>خطاها (" +
-            escapeHtml(errors.length) +
-            "):<br>" +
-            errors
-              .slice(0, 10)
-              .map(function (error) {
-                return escapeHtml(error);
-              })
-              .join("<br>");
+        renderReport(
+          {
+            converted: data.converted || 0,
+            skipped: data.skipped || 0,
+          },
+          {
+            mode: "remediation",
+            title: "تبدیل variationهای جاافتاده",
+            errors: errors,
+          },
+        );
 
-          if (errors.length > 10) {
-            message += "<br>...";
-          }
-        }
-
-        renderMessage(message, errors.length === 0);
+        renderMessage(
+          errors.length === 0
+            ? "عملیات remediation با موفقیت انجام شد."
+            : "عملیات انجام شد؛ برخی موارد خطا داشتند.",
+          errors.length === 0,
+        );
       },
     ).fail(function (xhr, status) {
       isSyncRunning = false;

@@ -130,11 +130,21 @@ if (!defined('ABSPATH')) {
             </form>
         </div>
 
-        <div class="sai-card">
-            <p class="title">وضعیت</p>
-            <div id="sai-ajax-result">
-                <p>از دکمه ها برای آزمایش دسترسی به API یا شروع همگام سازی محصول استفاده کنید.</p>
+        <div class="sai-sidebar">
+            <div class="sai-card">
+                <p class="title">وضعیت</p>
+                <div id="sai-ajax-result">
+                    <p>از دکمه‌ها برای آزمایش دسترسی به API یا شروع همگام‌سازی محصول استفاده کنید.</p>
+                </div>
+            </div>
+
+            <div class="sai-card">
+                <p class="title">گزارش همگام‌سازی</p>
+                <div id="sai-report-result">
+                    <p class="sai-report-empty">پس از شروع همگام‌سازی، آمار ساخته‌شده، آپدیت‌شده و رد شده اینجا نمایش داده می‌شود.</p>
+                </div>
             </div>
         </div>
+
     </div>
 </div>

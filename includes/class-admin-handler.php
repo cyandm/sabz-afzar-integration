@@ -113,6 +113,8 @@ class SAI_Admin_Handler
         $woo = new SAI_Woo_Integration();
 
         if ($offset === 0) {
+            SAI_Sync_Skip_Log::clear();
+
             $cache = $woo->fetch_and_cache_products();
 
             if (is_wp_error($cache)) {
