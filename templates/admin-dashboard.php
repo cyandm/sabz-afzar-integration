@@ -24,12 +24,22 @@ if (!defined('ABSPATH')) {
 
                 <div class="sai-field">
                     <label for="sai_api_base_url">آدرس برای ارسال درخواست پایه</label>
-                    <input type="text" id="sai_api_base_url" name="sai_api_base_url" value="<?php echo esc_attr(get_option('sai_api_base_url', 'http://localhost:4217')); ?>">
+                    <input
+                        type="text"
+                        id="sai_api_base_url"
+                        name="sai_api_base_url"
+                        placeholder="localhost:4217"
+                        value="<?php echo esc_attr(SAI_API_Service::format_base_url_for_display((string) get_option('sai_api_base_url', 'http://localhost:4217'))); ?>">
+                    <p class="description">می‌توانید بدون http:// وارد کنید؛ هنگام ذخیره یا دریافت توکن، http:// به‌صورت خودکار اضافه می‌شود.</p>
                 </div>
 
                 <div class="sai-field">
                     <label for="sai_fixed_token">توکن</label>
-                    <input type="text" id="sai_fixed_token" name="sai_fixed_token" value="<?php echo esc_attr(get_option('sai_fixed_token', '')); ?>">
+                    <div class="sai-token-row">
+                        <input type="text" id="sai_fixed_token" name="sai_fixed_token" value="<?php echo esc_attr(get_option('sai_fixed_token', '')); ?>">
+                        <button type="button" class="button" id="sai-refresh-token">ساخت توکن جدید</button>
+                    </div>
+                    <p class="description">توکن از <code>POST /TOKEN</code> (OAuth) با کاربر پیش‌فرض greenware گرفته می‌شود؛ فقط با کلیک «ساخت توکن جدید» به‌روز می‌شود. بعد از آن «بررسی ارتباط» را بزنید.</p>
                 </div>
 
                 <div class="sai-field">

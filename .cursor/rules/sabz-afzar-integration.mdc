@@ -110,6 +110,12 @@ Recommended order after code changes:
 
 Retired simple products: `draft` status, SKU `old-{GoodCode}`, meta `_sai_replaced_by_variation`.
 
+## API connection (admin)
+
+- Base URL: `SAI_API_Service::normalize_base_url()` — accepts host without scheme (`localhost:4217` → `http://localhost:4217`).
+- Token: `POST {base}/TOKEN` with `grant_type=password`, `userName`, `password` (defaults via `sai_token_username` / `sai_token_password` filters). Manual only: **ساخت توکن جدید** → `request_new_token($base_url)`.
+- linkJSON APIs use `Authorization: Bearer {access_token}` from `sai_fixed_token`. Test connection only after a fresh token.
+
 ## Logging
 
 Search PHP error log for `[SAI_SYNC]`:

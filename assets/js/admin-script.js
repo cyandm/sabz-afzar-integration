@@ -56,11 +56,78 @@ jQuery(function ($) {
   }
 
   function setButtonsDisabled(disabled) {
-    $("#sai-manual-sync, #sai-test-connection, #sai-remediate-variations").prop(
-      "disabled",
-      disabled,
-    );
+    $(
+      "#sai-manual-sync, #sai-test-connection, #sai-remediate-variations, #sai-refresh-token",
+    ).prop("disabled", disabled);
   }
+
+  $("#sai-refresh-token").on("click", function () {
+    if (isSyncRunning) {
+      renderMessage(
+        "همگام‌سازی در حال انجام است. لطفاً تا پایان آن صبر کنید.",
+        false,
+      );
+      return;
+    }
+
+    const baseUrl = $("#sai_api_base_url").val();
+
+    if (!baseUrl || String(baseUrl).trim() === "") {
+      renderMessage("لطفاً آدرس API را وارد کنید.", false);
+      return;
+    }
+
+    setButtonsDisabled(true);
+    renderMessage("در حال دریافت توکن جدید...", true);
+
+    $.post(
+      saiAdmin.ajaxUrl,
+      {
+        action: "sai_refresh_token",
+        nonce: saiAdmin.nonce,
+        sai_api_base_url: baseUrl,
+      },
+      function (response) {
+        setButtonsDisabled(false);
+
+        if (response && response.success && response.data && response.data.token) {
+          $("#sai_fixed_token").val(response.data.token);
+          renderMessage(
+            escapeHtml(response.data.message || "توکن جدید دریافت و ذخیره شد."),
+            true,
+          );
+          return;
+        }
+
+        renderMessage(
+          escapeHtml(
+            (response && response.data && response.data.message) ||
+              "دریافت توکن ناموفق بود",
+          ),
+          false,
+        );
+      },
+    ).fail(function (xhr, status) {
+      setButtonsDisabled(false);
+
+      let msg = "درخواست دریافت توکن ناموفق بود";
+
+      if (status) {
+        msg += " (" + escapeHtml(status) + ")";
+      }
+
+      if (
+        xhr &&
+        xhr.responseJSON &&
+        xhr.responseJSON.data &&
+        xhr.responseJSON.data.message
+      ) {
+        msg += "<br>" + escapeHtml(xhr.responseJSON.data.message);
+      }
+
+      renderMessage(msg, false);
+    });
+  });
 
   $("#sai-test-connection").on("click", function () {
     if (isSyncRunning) {
@@ -225,7 +292,10 @@ jQuery(function ($) {
 
   $("#sai-remediate-variations").on("click", function () {
     if (isSyncRunning) {
-      renderMessage("همگام‌سازی در حال انجام است. لطفاً تا پایان آن صبر کنید.", false);
+      renderMessage(
+        "همگام‌سازی در حال انجام است. لطفاً تا پایان آن صبر کنید.",
+        false,
+      );
       return;
     }
 

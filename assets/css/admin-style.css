@@ -64,6 +64,23 @@
   border-radius: 10px;
 }
 
+.sai-token-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+.sai-token-row input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.sai-token-row .button {
+  flex-shrink: 0;
+  align-self: center;
+}
+
 .sai-toggle-row {
   display: flex;
   align-items: center;

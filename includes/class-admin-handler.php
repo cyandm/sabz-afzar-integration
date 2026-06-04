@@ -14,6 +14,7 @@ class SAI_Admin_Handler
         add_action('wp_ajax_sai_manual_sync', [$this, 'ajax_manual_sync']);
         add_action('wp_ajax_sai_test_connection', [$this, 'ajax_test_connection']);
         add_action('wp_ajax_sai_remediate_variations', [$this, 'ajax_remediate_variations']);
+        add_action('wp_ajax_sai_refresh_token', [$this, 'ajax_refresh_token']);
     }
 
     public function register_menu()
@@ -71,7 +72,10 @@ class SAI_Admin_Handler
 
         update_option('sai_branch_code', sanitize_text_field($_POST['sai_branch_code'] ?? ''));
         update_option('sai_location_code', sanitize_text_field($_POST['sai_location_code'] ?? ''));
-        update_option('sai_api_base_url', esc_url_raw($_POST['sai_api_base_url'] ?? ''));
+        update_option(
+            'sai_api_base_url',
+            SAI_API_Service::normalize_base_url((string) ($_POST['sai_api_base_url'] ?? ''))
+        );
         update_option('sai_fixed_token', sanitize_text_field($_POST['sai_fixed_token'] ?? ''));
 
         update_option('sai_enable_customer_sync', !empty($_POST['sai_enable_customer_sync']) ? 'yes' : 'no');
@@ -166,5 +170,36 @@ class SAI_Admin_Handler
         );
 
         wp_send_json_success($result);
+    }
+
+    public function ajax_refresh_token()
+    {
+        check_ajax_referer('sai_admin_nonce', 'nonce');
+
+        if (!current_user_can('manage_woocommerce')) {
+            wp_send_json_error(['message' => 'Unauthorized']);
+        }
+
+        $base_url = SAI_API_Service::normalize_base_url((string) ($_POST['sai_api_base_url'] ?? ''));
+
+        if ($base_url === '') {
+            wp_send_json_error(['message' => 'آدرس API نامعتبر است. می‌توانید بدون http:// وارد کنید (مثلاً localhost:4217).']);
+        }
+
+        $token_result = SAI_API_Service::request_new_token($base_url);
+
+        if (is_wp_error($token_result)) {
+            wp_send_json_error(['message' => $token_result->get_error_message()]);
+        }
+
+        update_option('sai_api_base_url', $base_url);
+        update_option('sai_fixed_token', sanitize_text_field($token_result));
+
+        error_log('[SAI] New API token saved via admin refresh.');
+
+        wp_send_json_success([
+            'token'   => $token_result,
+            'message' => 'توکن جدید دریافت و ذخیره شد.',
+        ]);
     }
 }
