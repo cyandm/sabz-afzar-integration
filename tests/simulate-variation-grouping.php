@@ -17,6 +17,13 @@ if (!function_exists('sanitize_text_field')) {
     }
 }
 
+if (!function_exists('sanitize_key')) {
+    function sanitize_key($key)
+    {
+        return strtolower(preg_replace('/[^a-z0-9_\-]/', '', (string) $key));
+    }
+}
+
 require_once dirname(__DIR__) . '/includes/class-woo-integration.php';
 
 /**
@@ -42,6 +49,15 @@ final class VariationGroupingSimulation extends SAI_Woo_Integration
         return $method->invoke($this, $good_name);
     }
 
+    public function simulateExtractVariation(string $good_name): array
+    {
+        $reflection = new ReflectionClass($this);
+        $method = $reflection->getMethod('extract_variation_data');
+        $method->setAccessible(true);
+
+        return $method->invoke($this, $good_name);
+    }
+
     public function simulateBuildGroups(array $items): array
     {
         $reflection = new ReflectionClass($this);
@@ -49,6 +65,22 @@ final class VariationGroupingSimulation extends SAI_Woo_Integration
         $method->setAccessible(true);
 
         return $method->invoke($this, $items);
+    }
+
+    /**
+     * @param array<string, mixed> $group
+     */
+    public function simulateGroupIdentityMatches(
+        array $group,
+        string $stored_group_code,
+        string $stored_parent_name,
+        string $parent_sku = ''
+    ): bool {
+        $reflection = new ReflectionClass($this);
+        $method     = $reflection->getMethod('group_identity_matches_parent_meta');
+        $method->setAccessible(true);
+
+        return (bool) $method->invoke($this, $group, $stored_group_code, $stored_parent_name, $parent_sku);
     }
 }
 
@@ -84,6 +116,42 @@ function assert_color_parse(
 
     if ($result['base_name'] !== $expected_base) {
         echo "  FAIL: expected base={$expected_base}" . PHP_EOL;
+        $failures++;
+    }
+}
+
+function assert_variation_parse(
+    VariationGroupingSimulation $sim,
+    string $label,
+    string $good_name,
+    ?string $expected_parent,
+    ?string $expected_color,
+    ?string $expected_size
+): void {
+    global $failures;
+
+    $result = $sim->simulateExtractVariation($good_name);
+    $parent = $result['color_base_name'] ?? ($result['size_base_name'] ?? null);
+    $color = $result['color'] ?? null;
+    $size = $result['size'] ?? null;
+
+    echo $label . PHP_EOL;
+    echo '  parent: ' . ($parent ?? 'null') . PHP_EOL;
+    echo '  color: ' . ($color ?? 'null') . PHP_EOL;
+    echo '  size: ' . ($size ?? 'null') . PHP_EOL;
+
+    if ($parent !== $expected_parent) {
+        echo "  FAIL: expected parent={$expected_parent}" . PHP_EOL;
+        $failures++;
+    }
+
+    if ($color !== $expected_color) {
+        echo "  FAIL: expected color={$expected_color}" . PHP_EOL;
+        $failures++;
+    }
+
+    if ($size !== $expected_size) {
+        echo "  FAIL: expected size={$expected_size}" . PHP_EOL;
         $failures++;
     }
 }
@@ -127,6 +195,65 @@ assert_color_parse(
     'کفتان پرنده مهاجر'
 );
 assert_color_parse_null($sim, 'Inline negative: single middle color', 'تیشرت قرمز کاج');
+
+$tablo_parent = 'تابلو جام';
+
+assert_variation_parse(
+    $sim,
+    'Frame + dimension: تابلو جام قاب طلایی سایز 70×70',
+    'تابلو جام قاب طلایی سایز 70×70',
+    $tablo_parent,
+    'قاب طلایی',
+    '70X70'
+);
+assert_variation_parse(
+    $sim,
+    'Color suffix + dimension: تابلو جام طلایی سایز 50×50',
+    'تابلو جام طلایی سایز 50×50',
+    $tablo_parent,
+    'طلایی',
+    '50X50'
+);
+assert_variation_parse(
+    $sim,
+    'Dimension only: تابلو جام سایز 40×40',
+    'تابلو جام سایز 40×40',
+    $tablo_parent,
+    null,
+    '40X40'
+);
+assert_variation_parse(
+    $sim,
+    'Tablo size-only: تابلو بی همگان مشکی دوتکه بدون قاب سایز 70×70',
+    'تابلو بی همگان مشکی دوتکه بدون قاب سایز 70×70',
+    'تابلو بی همگان مشکی دوتکه بدون قاب',
+    null,
+    '70X70'
+);
+
+$tablo_group = [
+    'group_code'  => '20',
+    'parent_name' => 'تابلو بی همگان مشکی دوتکه بدون قاب',
+    'items'       => [
+        ['item' => ['GoodCode' => '2265']],
+    ],
+];
+
+echo 'Parent identity match (tablo vs t-shirt parent)' . PHP_EOL;
+
+if ($sim->simulateGroupIdentityMatches($tablo_group, '20', 'تابلو بی همگان مشکی دوتکه بدون قاب', 'sai-parent-2265')) {
+    echo '  OK: matching tablo parent accepted' . PHP_EOL;
+} else {
+    echo '  FAIL: matching tablo parent should be accepted' . PHP_EOL;
+    $failures++;
+}
+
+if (!$sim->simulateGroupIdentityMatches($tablo_group, '1082', 'تیشرت عشق', 'sai-parent-999')) {
+    echo '  OK: mismatched t-shirt parent rejected' . PHP_EOL;
+} else {
+    echo '  FAIL: mismatched t-shirt parent should be rejected' . PHP_EOL;
+    $failures++;
+}
 
 $kaj_parent = 'تیشرت کاج';
 $kaj_items = [
@@ -218,6 +345,68 @@ if ($variable_job === null) {
     foreach (['صورتی بنفش', 'صورتی', 'بنفش', 'قرمز', 'آبی قرمز'] as $expected_color) {
         if (!in_array($expected_color, $color_options, true)) {
             echo "  FAIL: missing color option {$expected_color}" . PHP_EOL;
+            $failures++;
+        }
+    }
+}
+
+$tablo_items = [
+    ['GoodCode' => 'T1', 'GoodName' => 'تابلو جام قاب طلایی سایز 70×70', 'GoodGroupCode' => '300'],
+    ['GoodCode' => 'T2', 'GoodName' => 'تابلو جام قاب نقره‌ای سایز 50×50', 'GoodGroupCode' => '300'],
+    ['GoodCode' => 'T3', 'GoodName' => 'تابلو جام قاب طلایی سایز 50×50', 'GoodGroupCode' => '300'],
+];
+
+$tablo_jobs = $sim->simulateBuildGroups($tablo_items);
+$tablo_variable_job = null;
+
+foreach ($tablo_jobs as $job) {
+    if (is_array($job) && ($job['type'] ?? '') === 'variable') {
+        $tablo_variable_job = $job;
+        break;
+    }
+}
+
+echo 'Tablo jam grouping' . PHP_EOL;
+
+if ($tablo_variable_job === null) {
+    echo "  FAIL: expected one variable group for تابلو جام" . PHP_EOL;
+    $failures++;
+} else {
+    $tablo_skus = array_map(
+        static function ($row) {
+            return is_array($row) && isset($row['item']['GoodCode']) ? $row['item']['GoodCode'] : '';
+        },
+        $tablo_variable_job['items'] ?? []
+    );
+
+    echo '  parent: ' . ($tablo_variable_job['parent_name'] ?? '') . PHP_EOL;
+    echo '  skus: ' . implode(', ', $tablo_skus) . PHP_EOL;
+
+    if (($tablo_variable_job['parent_name'] ?? '') !== $tablo_parent) {
+        echo "  FAIL: wrong parent name" . PHP_EOL;
+        $failures++;
+    }
+
+    foreach (['T1', 'T2', 'T3'] as $sku) {
+        if (!in_array($sku, $tablo_skus, true)) {
+            echo "  FAIL: missing SKU {$sku} in variable group" . PHP_EOL;
+            $failures++;
+        }
+    }
+
+    $tablo_colors = $tablo_variable_job['attributes']['color'] ?? [];
+    $tablo_sizes = $tablo_variable_job['attributes']['size'] ?? [];
+
+    foreach (['قاب طلایی', 'قاب نقره‌ای'] as $expected_color) {
+        if (!in_array($expected_color, $tablo_colors, true)) {
+            echo "  FAIL: missing color option {$expected_color}" . PHP_EOL;
+            $failures++;
+        }
+    }
+
+    foreach (['70X70', '50X50'] as $expected_size) {
+        if (!in_array($expected_size, $tablo_sizes, true)) {
+            echo "  FAIL: missing size option {$expected_size}" . PHP_EOL;
             $failures++;
         }
     }

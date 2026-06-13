@@ -87,13 +87,37 @@ if (!defined('ABSPATH')) {
                     </label>
                 </div>
 
-                <div class="sai-toggle-row">
-                    <span>همگام سازی اتوماتیک</span>
+                <div class="sai-toggle-row" style="border-bottom: 0px solid #f0f0f1;">
+                    <span>همگام‌سازی با cron سرور (cPanel)</span>
                     <label class="sai-switch">
-                        <input type="checkbox" name="sai_enable_auto_sync" <?php checked(get_option('sai_enable_auto_sync', 'no'), 'yes'); ?>>
+                        <input type="checkbox" name="sai_use_server_cron" id="sai_use_server_cron" <?php checked(get_option('sai_use_server_cron', 'yes'), 'yes'); ?>>
                         <span class="sai-slider"></span>
                     </label>
                 </div>
+                <p class="description" style="margin-top:-8px; padding-bottom:16px; border-bottom: 1px solid #f0f0f1;">
+                    وقتی فعال است، WP Cron همگام‌سازی محصول اجرا نمی‌شود؛ فقط <code>cron-sync.php</code> در cPanel باید زمان‌بندی شود.
+                </p>
+
+                <div class="sai-field sai-server-cron-box" id="sai-server-cron-box">
+                    <label>دستور Cron در cPanel</label>
+                    <textarea readonly rows="3" class="large-text code" onclick="this.select();">
+                        <?php $cron_script = trailingslashit(WP_PLUGIN_DIR) . 'sabz-afzar-integration/cron-sync.php';
+                        echo esc_textarea('/usr/local/bin/php ' . $cron_script . ' >> ~/logs/sai-cron.log 2>&1');
+                        ?>
+                    </textarea>
+                    <p class="description">مسیر PHP را با <code>which php</code> در SSH بررسی کنید. زمان‌بندی پیشنهادی: هر ساعت (دقیقه ۰).</p>
+                </div>
+
+                <div class="sai-toggle-row sai-wp-cron-row" id="sai-wp-cron-row" style="border-bottom: 0px solid #f0f0f1;">
+                    <span>همگام سازی اتوماتیک (WP Cron)</span>
+                    <label class="sai-switch">
+                        <input type="checkbox" name="sai_enable_auto_sync" id="sai_enable_auto_sync" <?php checked(get_option('sai_enable_auto_sync', 'no'), 'yes'); ?>>
+                        <span class="sai-slider"></span>
+                    </label>
+                </div>
+                <p class="description sai-wp-cron-desc" id="sai-wp-cron-desc" style="margin-top:-8px; padding-bottom:16px; border-bottom: 1px solid #f0f0f1;">
+                    فقط وقتی «cron سرور» خاموش است استفاده کنید.
+                </p>
 
                 <div class="sai-toggle-row" style="display: none;">
                     <span>از نقطه پایانی فشرده استفاده کنید (لطفا این مورد فعال نشود)</span>
@@ -104,12 +128,31 @@ if (!defined('ABSPATH')) {
                 </div>
 
                 <div class="sai-field">
+                    <label for="sai_sync_batch_size">تعداد job در هر batch</label>
+                    <input
+                        type="number"
+                        id="sai_sync_batch_size"
+                        name="sai_sync_batch_size"
+                        min="1"
+                        max="500"
+                        step="1"
+                        value="<?php echo esc_attr((string) Sabz_Afzar_Integration::get_sync_batch_size()); ?>">
+                    <p class="description">
+                        برای cron سرور، WP Cron و sync دستی اعمال می‌شود. واحد batch = یک job گروه‌بندی‌شده (مثلاً یک محصول متغیر با چند variation = یک job).
+                        پیشنهاد هاست: ۵۰ تا ۱۵۰؛ برای ۲۰۰۰+ محصول می‌توانید ۱۰۰–۲۰۰ امتحان کنید.
+                    </p>
+                </div>
+
+                <div class="sai-field" id="sai-wp-cron-interval">
                     <label for="sai_auto_sync_interval">فاصله همگام سازی خودکار</label>
                     <select id="sai_auto_sync_interval" name="sai_auto_sync_interval">
                         <option value="hourly" <?php selected(get_option('sai_auto_sync_interval', 'hourly'), 'hourly'); ?>>هر یک ساعت</option>
                         <option value="twicedaily" <?php selected(get_option('sai_auto_sync_interval', 'hourly'), 'twicedaily'); ?>>دو بار در روز</option>
                         <option value="daily" <?php selected(get_option('sai_auto_sync_interval', 'hourly'), 'daily'); ?>>روزی یک بار</option>
                     </select>
+                    <p class="description">
+                        اگر همگام‌سازی با cron سرور فعال است، این فیلد عملاً بی‌اثر است
+                    </p>
                 </div>
 
                 <div class="sai-field">

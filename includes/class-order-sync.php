@@ -207,23 +207,27 @@ class SAI_Order_Sync
             $mobile     = $this->mobile_without_leading_zero((string) $order->get_billing_phone());
         }
 
-        // email و introducerMobileNo در SAI_API_Service::build_customer_query_string تنظیم می‌شوند
         return [
             'firstName' => $first_name,
             'lastName'  => $last_name,
             'mobileNo'  => $mobile,
-            'isMale'    => true,
         ];
     }
 
     /**
      * @param array<string, mixed> $payload
+     * @return array{person_id: ?int, source: string, error: ?string}
      */
-    private function send_customer_to_api(array $payload): ?int
+    private function send_customer_to_api(array $payload): array
     {
         if ($payload['mobileNo'] === '') {
             $this->log('Customer sync skipped: mobile number is empty', $payload);
-            return null;
+
+            return [
+                'person_id' => null,
+                'source'    => 'api',
+                'error'     => 'شماره موبایل مشتری خالی است.',
+            ];
         }
 
         $this->log('Sending customer to API', $payload);
@@ -232,12 +236,31 @@ class SAI_Order_Sync
 
         if (is_wp_error($response)) {
             $this->log('add_customer WP_Error: ' . $response->get_error_message());
-            return null;
+
+            return [
+                'person_id' => null,
+                'source'    => 'api',
+                'error'     => $response->get_error_message(),
+            ];
         }
 
         $this->log('add_customer response', is_array($response) ? $response : ['raw' => $response]);
 
-        return $this->extract_api_person_id($response);
+        $person_id = $this->extract_api_person_id($response);
+
+        if ($person_id === null) {
+            return [
+                'person_id' => null,
+                'source'    => 'api',
+                'error'     => 'شناسه کاربری از API دریافت نشد.',
+            ];
+        }
+
+        return [
+            'person_id' => $person_id,
+            'source'    => 'api',
+            'error'     => null,
+        ];
     }
 
     /**
@@ -247,8 +270,13 @@ class SAI_Order_Sync
      */
     private function extract_api_person_id($response): ?int
     {
-        if (is_array($response) && isset($response['PersonId'])) {
-            return (int) $response['PersonId'];
+        if (is_array($response)) {
+            if (isset($response['PersonId'])) {
+                return (int) $response['PersonId'];
+            }
+            if (isset($response['Id'])) {
+                return (int) $response['Id'];
+            }
         }
 
         return $this->extract_api_id($response);
@@ -321,36 +349,55 @@ class SAI_Order_Sync
         }
     }
 
-    private function resolve_person_id(WC_Order $order): ?int
+    /**
+     * @return array{person_id: ?int, source: string, error: ?string}
+     */
+    private function resolve_person_id(WC_Order $order): array
     {
         $cached = $this->get_cached_person_id($order);
         if ($cached !== null) {
             $this->log('Using cached API PersonId ' . $cached . ' for order ' . $order->get_id());
-            return $cached;
+
+            return [
+                'person_id' => $cached,
+                'source'    => 'cache',
+                'error'     => null,
+            ];
         }
 
         if (!$this->is_customer_sync_enabled()) {
             $this->log('PersonId missing for order ' . $order->get_id() . ': customer sync is disabled.');
-            return null;
+
+            return [
+                'person_id' => null,
+                'source'    => 'none',
+                'error'     => 'همگام‌سازی مشتری غیرفعال است.',
+            ];
         }
 
         $payload = $this->build_customer_payload($order);
         if ($payload['mobileNo'] === '') {
             $this->log('PersonId missing for order ' . $order->get_id() . ': billing phone is empty.');
-            return null;
+
+            return [
+                'person_id' => null,
+                'source'    => 'none',
+                'error'     => 'شماره موبایل مشتری خالی است.',
+            ];
         }
 
-        $api_person_id = $this->send_customer_to_api($payload);
+        $api_result = $this->send_customer_to_api($payload);
 
-        if ($api_person_id === null) {
+        if ($api_result['person_id'] === null) {
             $this->log('PersonId missing for order ' . $order->get_id() . ': add_customer did not return PersonId.');
-            return null;
+
+            return $api_result;
         }
 
-        $this->persist_person_id($order, $api_person_id);
-        $this->log('Using API PersonId for hist factor: ' . $api_person_id);
+        $this->persist_person_id($order, $api_result['person_id']);
+        $this->log('Using API PersonId for hist factor: ' . $api_result['person_id']);
 
-        return $api_person_id;
+        return $api_result;
     }
 
     /**
@@ -428,8 +475,9 @@ class SAI_Order_Sync
 
     /**
      * @param array<string, mixed> $payload
+     * @return array{success: bool, factor_id: ?int, error: ?string}
      */
-    private function send_hist_factor_to_api(int $order_id, WC_Order $order, array $payload): void
+    private function send_hist_factor_to_api(int $order_id, WC_Order $order, array $payload): array
     {
         $this->log("Sending confirmed hist factor for order $order_id", $payload);
 
@@ -437,7 +485,12 @@ class SAI_Order_Sync
 
         if (is_wp_error($response)) {
             $this->log("add_hist_factor WP_Error for order $order_id: " . $response->get_error_message());
-            return;
+
+            return [
+                'success'   => false,
+                'factor_id' => null,
+                'error'     => $response->get_error_message(),
+            ];
         }
 
         $this->log("add_hist_factor response for order $order_id", is_array($response) ? $response : ['raw' => $response]);
@@ -451,7 +504,60 @@ class SAI_Order_Sync
             $this->log("Hist factor ID $factor_id saved on order $order_id");
         }
 
-        $order->save();
+        if ($factor_id === null) {
+            return [
+                'success'   => false,
+                'factor_id' => null,
+                'error'     => 'شناسه فاکتور از API دریافت نشد.',
+            ];
+        }
+
+        return [
+            'success'   => true,
+            'factor_id' => $factor_id,
+            'error'     => null,
+        ];
+    }
+
+    private function add_private_order_note(WC_Order $order, string $message): void
+    {
+        $order->add_order_note($message, false, false);
+    }
+
+    /**
+     * @param array{person_id: ?int, source: string, error: ?string} $result
+     */
+    private function build_customer_note_message(array $result): string
+    {
+        if ($result['person_id'] !== null) {
+            $person_id = $result['person_id'];
+
+            if ($result['source'] === 'cache') {
+                return "نام کاربری از قبل ساخته شده است.\nشناسه کاربری در نرم افزار حسابداری: {$person_id}";
+            }
+
+            return "نام کاربری ساخته شد.\nشناسه کاربری در نرم افزار حسابداری: {$person_id}";
+        }
+
+        $error = $result['error'] ?? 'نامشخص';
+
+        return "نام کاربری ایجاد و یا یافت نشد.\nارور: {$error}";
+    }
+
+    /**
+     * @param array{success: bool, factor_id: ?int, error: ?string} $result
+     */
+    private function build_factor_note_message(array $result): string
+    {
+        if ($result['success'] && $result['factor_id'] !== null) {
+            $factor_id = $result['factor_id'];
+
+            return "فاکتور ایجاد شد.\nشماره فاکتور صادر شده به نرم افزار حسابداری: {$factor_id}";
+        }
+
+        $error = $result['error'] ?? 'نامشخص';
+
+        return "فاکتور ایجاد نشد.\nارور: {$error}";
     }
 
     public function sync_order_to_api(int $order_id): void
@@ -472,32 +578,59 @@ class SAI_Order_Sync
             return;
         }
 
-        $person_id = $this->resolve_person_id($order);
+        $customer_sync_enabled = $this->is_customer_sync_enabled();
+        $factor_creation_enabled = $this->is_factor_creation_enabled();
 
-        if ($this->is_factor_creation_enabled()) {
-            if ($person_id === null) {
-                $this->log("Confirmed factor not sent for order $order_id: PersonId is required but missing.");
-                $order->save();
-                return;
-            }
+        $person_result = [
+            'person_id' => null,
+            'source'    => 'none',
+            'error'     => null,
+        ];
 
-            $details = $this->build_hist_factor_details($order);
-            if ($details === []) {
-                $this->log("Confirmed factor not sent for order $order_id: no line items.");
-                $order->save();
-                return;
-            }
+        if ($customer_sync_enabled || $factor_creation_enabled) {
+            $person_result = $this->resolve_person_id($order);
+        }
 
-            $this->send_hist_factor_to_api(
-                $order_id,
+        if ($customer_sync_enabled) {
+            $this->add_private_order_note(
                 $order,
-                $this->build_hist_factor_payload($order, $person_id)
+                $this->build_customer_note_message($person_result)
             );
-            return;
         }
 
-        if ($person_id !== null) {
-            $order->save();
+        if ($factor_creation_enabled) {
+            if ($person_result['person_id'] === null) {
+                $factor_result = [
+                    'success'   => false,
+                    'factor_id' => null,
+                    'error'     => $person_result['error'] ?? 'شناسه مشتری یافت نشد.',
+                ];
+                $this->log("Confirmed factor not sent for order $order_id: PersonId is required but missing.");
+            } else {
+                $details = $this->build_hist_factor_details($order);
+
+                if ($details === []) {
+                    $factor_result = [
+                        'success'   => false,
+                        'factor_id' => null,
+                        'error'     => 'هیچ آیتم معتبری با کد کالا برای فاکتور یافت نشد.',
+                    ];
+                    $this->log("Confirmed factor not sent for order $order_id: no line items.");
+                } else {
+                    $factor_result = $this->send_hist_factor_to_api(
+                        $order_id,
+                        $order,
+                        $this->build_hist_factor_payload($order, $person_result['person_id'])
+                    );
+                }
+            }
+
+            $this->add_private_order_note(
+                $order,
+                $this->build_factor_note_message($factor_result)
+            );
         }
+
+        $order->save();
     }
 }

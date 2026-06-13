@@ -10,7 +10,9 @@ alwaysApply: false
 
 1. `fetch_and_cache_products()` — API → `build_variation_groups()` → `uploads/sai-cache/products.json`
 2. `sync_products_from_cache_batch()` — processes jobs in batches (variable jobs first, then simple)
-3. Entry points: WP cron, `cron-sync.php`, admin manual sync
+3. Entry points: `cron-sync.php` (cPanel, preferred), WP cron (fallback), admin manual sync
+4. Server cron: enable `sai_use_server_cron=yes` in admin — disables WP product cron scheduling
+5. Concurrent runs: `SAI_Sync_Lock` transient (`sai_product_sync_running`, TTL 2h)
 
 Core file: `includes/class-woo-integration.php`
 
@@ -46,22 +48,70 @@ Size-only groups (no color promotion) still use:
 
 ### Parent SKU
 
+**New format** (created parents only):
+
+```
+sai-parent-{sanitize_key(first GoodCode in group, sorted alphabetically)}
+```
+
+**Legacy format** (lookup fallback for existing imports):
+
 ```
 sai-parent-{sanitize_key(GoodGroupCode)}-{md5(normalize_grouping_name(base_name))}
 ```
 
 Variation SKU = `GoodCode`.
 
+Meta on parent: `_sai_parent_anchor_goodcode` stores the anchor GoodCode.
+
+### Parent lookup (`find_variable_parent_id`)
+
+Before creating a variable parent, resolve existing parent in order:
+
+1. New SKU `sai-parent-{anchorGoodCode}`
+2. Any group item's `GoodCode` → if variation, use `get_parent_id()`
+3. Legacy SKU (group code + base name hash)
+4. Meta query `_sai_is_parent=yes` + `_sai_parent_anchor_goodcode`
+
+Each candidate must pass `parent_matches_import_group()` (`group_identity_matches_parent_meta`):
+
+- Anchor SKU `sai-parent-{anchorGoodCode}` always accepted (name/category fixed on update)
+- Otherwise `_sai_base_name` / product name must match `parent_name` (normalized)
+- If both have `_sai_group_code` and `group_code`, they must match
+
+Wrong variation parent (e.g. variation under `تیشرت عشق` for a `تابلو` job) is rejected → new parent created; `create_or_update_variation()` reparents via `set_parent_id()`.
+
+**Rule:** When parent is found via fallback, do **not** change its SKU — only set anchor meta.
+
+### Category, slug, and status during sync
+
+- **Category:** `apply_group_category()` runs on **create and update**; replaces previous `_sai_category_id` term, keeps manually added categories.
+- **Slug:** `sync_product_slug_from_name()` updates slug from product name on every sync (parent + simple).
+- **Status:** Variable parent updates preserve current status (no forced `publish`). New variable parents and new simple products still publish on create.
+- **Trash:** Products in `trash` are never updated or republished. Sync skips them (`sai_product_in_trash`) and does not create a duplicate with the same SKU. `retire_existing_simple_product_for_variation()` also ignores trashed simple products.
+
 ## Name parsing
 
 ### Size (`extract_size_variation`)
 
-Supported suffixes:
+Supported suffixes (checked in order):
 
-- `سایز 3`, `سایز3`, `سایز  M` (optional space after سایز)
-- Standalone trailing size: `... M`, `... 3`, `... XL`
+1. **Dimension** — `سایز 70×70`, `سایز 50x50` (normalized to `70X70`, `50X50`)
+2. **Clothing** — `سایز 3`, `سایز3`, `سایز M` (optional space after سایز)
+3. Standalone trailing clothing size: `... M`, `... 3`, `... XL`
 
-Sizes: `0-4`, `S`, `M`, `L`, `XL`, `2XL`, `3XL`, `4XL`
+Clothing sizes: `0-4`, `S`, `M`, `L`, `XL`, `2XL`, `3XL`, `4XL`
+
+Dimension sizes require the `سایز` keyword (trailing `70×70` alone is not supported).
+
+### Frame color (`extract_frame_color_variation`)
+
+When a dimension/clothing size is parsed, color is resolved on the remaining base name:
+
+1. **Frame descriptor** — pattern `{base} قاب {descriptor}` → color `قاب {descriptor}` (e.g. `قاب طلایی`)
+2. Fallback to `extract_color_variation()` for other mixed patterns (e.g. `تابلو جام طلایی سایز 50×50`)
+
+Example: `تابلو جام قاب طلایی سایز 70×70` → parent `تابلو جام`, color `قاب طلایی`, size `70X70`
 
 ### Color (`extract_color_variation`)
 
@@ -103,7 +153,7 @@ Global attributes: `pa_color`, `pa_size` (`COLOR_ATTRIBUTE_NAME`, `SIZE_ATTRIBUT
 
 - Have `_sai_group_code` meta
 - Parse as a valid variation name
-- Match an existing **variable** parent via `get_parent_sku()`
+- Match an existing **variable** parent via `find_variable_parent_id()` (new SKU, variation parent, legacy SKU, or anchor meta)
 
 Admin: **همگام سازی سبز** → **تبدیل variationهای جاافتاده**
 
@@ -119,6 +169,16 @@ Retired simple products: `draft` status, SKU `old-{GoodCode}`, meta `_sai_replac
 - Base URL: `SAI_API_Service::normalize_base_url()` — accepts host without scheme (`localhost:4217` → `http://localhost:4217`).
 - Token: `POST {base}/TOKEN` with `grant_type=password`, `userName`, `password` (defaults via `sai_token_username` / `sai_token_password` filters). Manual only: **ساخت توکن جدید** → `request_new_token($base_url)`.
 - linkJSON APIs use `Authorization: Bearer {access_token}` from `sai_fixed_token`. Test connection only after a fresh token.
+
+## Order sync (customer + hist factor)
+
+Trigger: `woocommerce_order_status_processing` → `SAI_Order_Sync::sync_order_to_api`.
+
+- **AddCustomer:** Postman AddPerson — ۶ query param: `firstName`, `lastName`, `mobileNo` (10 digits), `email=null`, `introducerMobileNo=''` (literal quotes in URL), `isMale=true`; no `nationalCode` in query; `add_customer()` calls `request(..., json_headers=false)` — no `Content-Type` on empty POST.
+- **Deploy:** production uses `sabz-afzar-integration.zip` — rebuild zip after code changes (see README).
+- **Response:** `PersonId` then `Id`; cached in `_sai_person_id`.
+- **Hist factor:** `POST api/LinkJSONEShopAddHistFactor` — payload `HistFactorDocModel` / `histFactorDocDetails`; requires resolved `PersonId`.
+- **Order notes:** private admin notes via `$order->add_order_note( $msg, false, false )` — one for customer sync result, one for factor result. Customer: «ساخته شد» (API) vs «از قبل ساخته شده» (WP cache `_sai_person_id`); factor: success with `factor_id` or error text. Skipped when `_sai_hist_factor_synced=yes`.
 
 ## Logging
 

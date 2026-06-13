@@ -352,7 +352,15 @@ class SAI_Woo_Integration
     private function extract_size_variation($good_name)
     {
         $name = $this->strip_grouping_marker($good_name);
+        $dimension = '(\d+\s*[×xX]\s*\d+)';
         $sizes = '(0|1|2|3|4|[234]?XL|S|M|L)';
+
+        if (preg_match('/^(.*?)\s+سایز\s*' . $dimension . '$/iu', $name, $matches)) {
+            return [
+                'base_name' => $this->normalize_persian_text($matches[1]),
+                'size'      => $this->normalize_size_value($matches[2]),
+            ];
+        }
 
         if (preg_match('/^(.*?)\s+سایز\s*' . $sizes . '$/iu', $name, $matches)) {
             return [
@@ -369,6 +377,30 @@ class SAI_Woo_Integration
         }
 
         return null;
+    }
+
+    /**
+     * @return array{base_name:string,color:string}|null
+     */
+    private function extract_frame_color_variation($good_name)
+    {
+        $name = $this->strip_grouping_marker($good_name);
+
+        if (!preg_match('/^(.*?)\s+(قاب\s+.+)$/u', $name, $matches)) {
+            return null;
+        }
+
+        $base_name = $this->normalize_persian_text($matches[1]);
+        $color = $this->normalize_persian_text($matches[2]);
+
+        if ($base_name === '' || $color === '') {
+            return null;
+        }
+
+        return [
+            'base_name' => $base_name,
+            'color'     => $color,
+        ];
     }
 
     private function get_color_suffixes()
@@ -733,14 +765,21 @@ class SAI_Woo_Integration
         $size = null;
         $size_base_name = null;
         $color_source_name = $name;
+        $color_variation = null;
 
         if ($size_variation !== null) {
             $size = $size_variation['size'];
             $size_base_name = $size_variation['base_name'];
             $color_source_name = $size_base_name;
-        }
 
-        $color_variation = $this->extract_color_variation($color_source_name);
+            $color_variation = $this->extract_frame_color_variation($color_source_name);
+
+            if ($color_variation === null) {
+                $color_variation = $this->extract_color_variation($color_source_name);
+            }
+        } else {
+            $color_variation = $this->extract_color_variation($color_source_name);
+        }
 
         return [
             'size'            => $size,
@@ -752,7 +791,15 @@ class SAI_Woo_Integration
 
     private function normalize_size_value($size)
     {
-        return strtoupper(trim((string) $size));
+        $size = trim((string) $size);
+
+        if (preg_match('/^\d+\s*[×xX]\s*\d+$/u', $size)) {
+            $normalized = preg_replace('/\s+/u', '', $size);
+
+            return str_replace(['×', 'x'], 'X', $normalized);
+        }
+
+        return strtoupper($size);
     }
 
     private function build_variation_groups(array $items)
@@ -949,9 +996,10 @@ class SAI_Woo_Integration
             return new WP_Error('sai_invalid_variable_group', 'Invalid variable product group');
         }
 
-        $parent_sku = $this->get_parent_sku($group_code, $parent_name);
-        $product_id = $this->find_product_id_by_sku($parent_sku);
-        $result_type = 'updated';
+        $anchor_good_code = $this->get_group_anchor_good_code($group);
+        $parent_sku       = $anchor_good_code !== '' ? $this->get_parent_sku($anchor_good_code) : '';
+        $product_id       = $this->find_variable_parent_id($group);
+        $result_type      = 'updated';
 
         if ($product_id) {
             $product = wc_get_product($product_id);
@@ -960,17 +1008,43 @@ class SAI_Woo_Integration
                 return new WP_Error('sai_invalid_parent_product', 'Could not load variable parent');
             }
 
+            $trash_error = $this->reject_if_product_in_trash($product);
+
+            if ($trash_error instanceof WP_Error) {
+                return $trash_error;
+            }
+
             if (!$product->is_type('variable')) {
-                return new WP_Error('sai_parent_sku_conflict', 'Parent SKU already belongs to a non-variable product: ' . $parent_sku);
+                $existing_sku = sanitize_text_field($product->get_sku());
+
+                return new WP_Error('sai_parent_sku_conflict', 'Parent SKU already belongs to a non-variable product: ' . $existing_sku);
             }
         } else {
+            $trash_error = $this->reject_if_any_sku_in_trash(
+                array_filter([
+                    $parent_sku,
+                    $group_code !== '' && $parent_name !== ''
+                        ? $this->get_legacy_parent_sku($group_code, $parent_name)
+                        : '',
+                ])
+            );
+
+            if ($trash_error instanceof WP_Error) {
+                return $trash_error;
+            }
+
             $product = new WC_Product_Variable();
-            $product->set_sku($parent_sku);
+
+            if ($parent_sku !== '') {
+                $product->set_sku($parent_sku);
+            }
+
+            $product->set_status('publish');
             $result_type = 'created';
         }
 
         $product->set_name($parent_name);
-        $product->set_status('publish');
+        $this->sync_product_slug_from_name($product, $parent_name);
 
         $product_attributes = [];
         $attribute_names = [];
@@ -1021,6 +1095,7 @@ class SAI_Woo_Integration
         }
 
         $product->set_attributes($product_attributes);
+
         $this->apply_group_category($product, $group_name);
 
         $product->update_meta_data('_sai_is_parent', 'yes');
@@ -1029,9 +1104,13 @@ class SAI_Woo_Integration
         $product->update_meta_data('_sai_base_name', $parent_name);
         $product->update_meta_data('_sai_variation_attributes', wp_json_encode($attribute_names));
 
+        if ($anchor_good_code !== '') {
+            $product->update_meta_data('_sai_parent_anchor_goodcode', $anchor_good_code);
+        }
+
         $product_id = $product->save();
 
-        error_log('[SAI_SYNC] VARIABLE ' . strtoupper($result_type) . ': SKU=' . $parent_sku . ' | Name=' . $parent_name);
+        error_log('[SAI_SYNC] VARIABLE ' . strtoupper($result_type) . ': SKU=' . $product->get_sku() . ' | Name=' . $parent_name);
 
         return [
             'product_id' => $product_id,
@@ -1090,6 +1169,12 @@ class SAI_Woo_Integration
 
         $this->retire_existing_simple_product_for_variation($good_code);
 
+        $trash_error = $this->reject_if_sku_in_trash($good_code);
+
+        if ($trash_error instanceof WP_Error) {
+            return $trash_error;
+        }
+
         $variation_id = $this->find_product_id_by_sku($good_code);
         $result_type = 'updated';
 
@@ -1098,6 +1183,12 @@ class SAI_Woo_Integration
 
             if (!$variation) {
                 return new WP_Error('sai_invalid_variation', 'Could not load variation');
+            }
+
+            $trash_error = $this->reject_if_product_in_trash($variation);
+
+            if ($trash_error instanceof WP_Error) {
+                return $trash_error;
             }
 
             if (!$variation->is_type('variation')) {
@@ -1143,6 +1234,10 @@ class SAI_Woo_Integration
             return;
         }
 
+        if ($this->is_product_in_trash($product)) {
+            return;
+        }
+
         $old_sku = 'old-' . $good_code;
 
         if ($this->find_product_id_by_sku($old_sku)) {
@@ -1169,9 +1264,323 @@ class SAI_Woo_Integration
         return (int) wc_get_product_id_by_sku($sku);
     }
 
-    private function get_parent_sku($group_code, $base_name)
+    private function find_trashed_product_id_by_sku(string $sku): int
+    {
+        $sku = sanitize_text_field($sku);
+
+        if ($sku === '') {
+            return 0;
+        }
+
+        $ids = wc_get_products([
+            'sku'    => $sku,
+            'status' => 'trash',
+            'limit'  => 1,
+            'return' => 'ids',
+        ]);
+
+        if (!is_array($ids) || empty($ids)) {
+            return 0;
+        }
+
+        return (int) $ids[0];
+    }
+
+    /**
+     * @param WC_Product|WC_Product_Variation|WC_Product_Variable|WC_Product_Simple|null $product
+     */
+    private function is_product_in_trash($product): bool
+    {
+        return is_object($product)
+            && method_exists($product, 'get_status')
+            && $product->get_status() === 'trash';
+    }
+
+    private function reject_if_sku_in_trash(string $sku): ?WP_Error
+    {
+        $sku = sanitize_text_field($sku);
+
+        if ($sku === '' || $this->find_trashed_product_id_by_sku($sku) <= 0) {
+            return null;
+        }
+
+        return new WP_Error(
+            'sai_product_in_trash',
+            'Product is in trash; sync skipped to preserve trash status: ' . $sku
+        );
+    }
+
+    /**
+     * @param WC_Product|WC_Product_Variation|WC_Product_Variable|WC_Product_Simple|null $product
+     */
+    private function reject_if_product_in_trash($product): ?WP_Error
+    {
+        if (!$this->is_product_in_trash($product)) {
+            return null;
+        }
+
+        $sku = is_object($product) && method_exists($product, 'get_sku')
+            ? sanitize_text_field((string) $product->get_sku())
+            : '';
+
+        return new WP_Error(
+            'sai_product_in_trash',
+            'Product is in trash; sync skipped to preserve trash status' . ($sku !== '' ? ': ' . $sku : '')
+        );
+    }
+
+    /**
+     * @param array<int, string> $skus
+     */
+    private function reject_if_any_sku_in_trash(array $skus): ?WP_Error
+    {
+        foreach ($skus as $sku) {
+            $trash_error = $this->reject_if_sku_in_trash($sku);
+
+            if ($trash_error instanceof WP_Error) {
+                return $trash_error;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * First GoodCode in a variable group (sorted alphabetically) — stable parent anchor.
+     */
+    private function get_group_anchor_good_code(array $group): string
+    {
+        $good_codes = [];
+        $items      = isset($group['items']) && is_array($group['items']) ? $group['items'] : [];
+
+        foreach ($items as $variation_item) {
+            $item      = isset($variation_item['item']) && is_array($variation_item['item']) ? $variation_item['item'] : [];
+            $good_code = isset($item['GoodCode']) ? sanitize_text_field($item['GoodCode']) : '';
+
+            if ($good_code !== '') {
+                $good_codes[] = $good_code;
+            }
+        }
+
+        if ($good_codes === []) {
+            return '';
+        }
+
+        sort($good_codes, SORT_STRING);
+
+        return $good_codes[0];
+    }
+
+    private function get_parent_sku(string $anchor_good_code): string
+    {
+        return 'sai-parent-' . sanitize_key($anchor_good_code);
+    }
+
+    private function get_legacy_parent_sku(string $group_code, string $base_name): string
     {
         return 'sai-parent-' . sanitize_key($group_code) . '-' . md5($this->normalize_grouping_name($base_name));
+    }
+
+    private function is_valid_variable_parent(int $product_id): bool
+    {
+        if ($product_id <= 0) {
+            return false;
+        }
+
+        $product = wc_get_product($product_id);
+
+        return $product
+            && $product->is_type('variable')
+            && !$this->is_product_in_trash($product);
+    }
+
+    /**
+     * @param array<string, mixed> $group
+     */
+    private function group_identity_matches_parent_meta(
+        array $group,
+        string $stored_group_code,
+        string $stored_parent_name,
+        string $parent_sku = ''
+    ): bool {
+        $expected_group_code  = isset($group['group_code']) ? sanitize_text_field((string) $group['group_code']) : '';
+        $expected_parent_name = isset($group['parent_name']) ? sanitize_text_field((string) $group['parent_name']) : '';
+        $anchor_good_code     = $this->get_group_anchor_good_code($group);
+
+        if ($anchor_good_code !== '' && $parent_sku !== '') {
+            if ($parent_sku === $this->get_parent_sku($anchor_good_code)) {
+                return true;
+            }
+        }
+
+        $expected_name_normalized = $this->normalize_grouping_name($expected_parent_name);
+        $stored_name_normalized   = $this->normalize_grouping_name($stored_parent_name);
+
+        if ($expected_name_normalized === '' || $expected_name_normalized !== $stored_name_normalized) {
+            return false;
+        }
+
+        if ($expected_group_code !== '' && $stored_group_code !== '' && $expected_group_code !== $stored_group_code) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param array<string, mixed> $group
+     */
+    private function parent_matches_import_group(int $parent_id, array $group): bool
+    {
+        if (!$this->is_valid_variable_parent($parent_id)) {
+            return false;
+        }
+
+        $product = wc_get_product($parent_id);
+
+        if (!$product) {
+            return false;
+        }
+
+        $stored_group_code = sanitize_text_field($product->get_meta('_sai_group_code', true));
+        $stored_base_name  = sanitize_text_field($product->get_meta('_sai_base_name', true));
+        $parent_name       = $stored_base_name !== ''
+            ? $stored_base_name
+            : sanitize_text_field($product->get_name());
+
+        return $this->group_identity_matches_parent_meta(
+            $group,
+            $stored_group_code,
+            $parent_name,
+            sanitize_text_field($product->get_sku())
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $group
+     */
+    private function accept_variable_parent_candidate(int $parent_id, array $group): int
+    {
+        if ($parent_id > 0 && $this->parent_matches_import_group($parent_id, $group)) {
+            return $parent_id;
+        }
+
+        return 0;
+    }
+
+    /**
+     * Resolve an existing variable parent without creating duplicates.
+     */
+    private function find_variable_parent_id(array $group): int
+    {
+        $anchor_good_code = $this->get_group_anchor_good_code($group);
+
+        if ($anchor_good_code !== '') {
+            $parent_id = $this->accept_variable_parent_candidate(
+                $this->find_product_id_by_sku($this->get_parent_sku($anchor_good_code)),
+                $group
+            );
+
+            if ($parent_id) {
+                return $parent_id;
+            }
+        }
+
+        $items = isset($group['items']) && is_array($group['items']) ? $group['items'] : [];
+
+        foreach ($items as $variation_item) {
+            $item      = isset($variation_item['item']) && is_array($variation_item['item']) ? $variation_item['item'] : [];
+            $good_code = isset($item['GoodCode']) ? sanitize_text_field($item['GoodCode']) : '';
+
+            if ($good_code === '') {
+                continue;
+            }
+
+            $product_id = $this->find_product_id_by_sku($good_code);
+
+            if (!$product_id) {
+                continue;
+            }
+
+            $product = wc_get_product($product_id);
+
+            if (!$product) {
+                continue;
+            }
+
+            if ($product->is_type('variation')) {
+                $parent_id = $this->accept_variable_parent_candidate((int) $product->get_parent_id(), $group);
+
+                if ($parent_id) {
+                    return $parent_id;
+                }
+            }
+        }
+
+        $group_code  = isset($group['group_code']) ? sanitize_text_field($group['group_code']) : '';
+        $parent_name = isset($group['parent_name']) ? sanitize_text_field($group['parent_name']) : '';
+
+        if ($group_code !== '' && $parent_name !== '') {
+            $legacy_sku = $this->get_legacy_parent_sku($group_code, $parent_name);
+            $parent_id  = $this->accept_variable_parent_candidate(
+                $this->find_product_id_by_sku($legacy_sku),
+                $group
+            );
+
+            if ($parent_id) {
+                return $parent_id;
+            }
+        }
+
+        if ($anchor_good_code !== '') {
+            $parent_ids = wc_get_products([
+                'limit'      => 1,
+                'return'     => 'ids',
+                'type'       => 'variable',
+                'meta_query' => [
+                    'relation' => 'AND',
+                    [
+                        'key'   => '_sai_is_parent',
+                        'value' => 'yes',
+                    ],
+                    [
+                        'key'   => '_sai_parent_anchor_goodcode',
+                        'value' => $anchor_good_code,
+                    ],
+                ],
+            ]);
+
+            if (is_array($parent_ids) && !empty($parent_ids)) {
+                $parent_id = $this->accept_variable_parent_candidate((int) $parent_ids[0], $group);
+
+                if ($parent_id) {
+                    return $parent_id;
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    private function sync_product_slug_from_name($product, string $name): void
+    {
+        if (!is_object($product) || !method_exists($product, 'get_slug') || !method_exists($product, 'set_slug')) {
+            return;
+        }
+
+        $name = trim($name);
+
+        if ($name === '') {
+            return;
+        }
+
+        $new_slug = sanitize_title($name);
+
+        if ($new_slug === '' || $product->get_slug() === $new_slug) {
+            return;
+        }
+
+        $product->set_slug($new_slug);
     }
 
     private function sort_variation_attributes(array $attributes)
@@ -1552,6 +1961,12 @@ class SAI_Woo_Integration
             return new WP_Error('sai_missing_code', 'Missing GoodCode');
         }
 
+        $trash_error = $this->reject_if_sku_in_trash($good_code);
+
+        if ($trash_error instanceof WP_Error) {
+            return $trash_error;
+        }
+
         $product_id = $this->find_product_id_by_sku($good_code);
 
         if ($product_id) {
@@ -1561,6 +1976,12 @@ class SAI_Woo_Integration
                 return new WP_Error('sai_invalid_product', 'Could not load product');
             }
 
+            $trash_error = $this->reject_if_product_in_trash($product);
+
+            if ($trash_error instanceof WP_Error) {
+                return $trash_error;
+            }
+
             if ($product->is_type('variation')) {
                 return new WP_Error('sai_simple_sku_conflict', 'Simple product SKU already belongs to a variation: ' . $good_code);
             }
@@ -1568,14 +1989,18 @@ class SAI_Woo_Integration
             $result_type = 'updated';
         } else {
             $product = new WC_Product_Simple();
-            $product->set_name($good_name !== '' ? $good_name : $good_code);
             $product->set_sku($good_code);
             $product->set_status('publish');
             $result_type = 'created';
         }
 
+        $display_name = $good_name !== '' ? $good_name : $good_code;
+        $product->set_name($display_name);
+        $this->sync_product_slug_from_name($product, $display_name);
+
         $this->apply_price_data($product, $item);
         $this->apply_stock_data($product, $item);
+
         $this->apply_group_category($product, isset($item['GoodGroupName']) ? sanitize_text_field($item['GoodGroupName']) : '');
 
         $product->update_meta_data('_sai_good_id', isset($item['GoodId']) ? sanitize_text_field($item['GoodId']) : '');
@@ -1669,8 +2094,18 @@ class SAI_Woo_Integration
                 continue;
             }
 
-            $parent_sku = $this->get_parent_sku($group_code, $remediation['parent_name']);
-            $parent_id = $this->find_product_id_by_sku($parent_sku);
+            $lookup_group = [
+                'parent_name' => $remediation['parent_name'],
+                'group_code'  => $group_code,
+                'items'       => [
+                    [
+                        'item' => [
+                            'GoodCode' => $good_code,
+                        ],
+                    ],
+                ],
+            ];
+            $parent_id = $this->find_variable_parent_id($lookup_group);
 
             if (!$parent_id) {
                 $skipped++;
@@ -1724,6 +2159,8 @@ class SAI_Woo_Integration
             wc_delete_product_transients((int) $parent_id);
             $converted++;
 
+            $parent_sku = $parent ? sanitize_text_field($parent->get_sku()) : '';
+
             error_log('[SAI_SYNC] Remediated orphan simple to variation: SKU=' . $good_code . ' | Parent=' . $parent_sku);
         }
 
@@ -1762,12 +2199,6 @@ class SAI_Woo_Integration
         }
 
         if ($parent_name === '' || empty($attributes)) {
-            return null;
-        }
-
-        $parent_sku = $this->get_parent_sku($group_code, $parent_name);
-
-        if (!$this->find_product_id_by_sku($parent_sku)) {
             return null;
         }
 

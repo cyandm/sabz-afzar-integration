@@ -1,4 +1,19 @@
 jQuery(function ($) {
+  function updateCronModeUi() {
+    const useServerCron = $("#sai_use_server_cron").is(":checked");
+    $("#sai-server-cron-box").toggle(useServerCron);
+    $("#sai-wp-cron-row, #sai-wp-cron-desc, #sai-wp-cron-interval").toggle(
+      !useServerCron,
+    );
+
+    if (useServerCron) {
+      $("#sai_enable_auto_sync").prop("checked", false);
+    }
+  }
+
+  $("#sai_use_server_cron").on("change", updateCronModeUi);
+  updateCronModeUi();
+
   let isSyncRunning = false;
   let skipLogLines = [];
   const SKIP_LOG_UI_MAX = 500;
@@ -349,7 +364,7 @@ jQuery(function ($) {
     resetReport();
 
     let offset = 0;
-    const limit = 20;
+    const limit = parseInt(saiAdmin.syncBatchSize, 10) || 100;
 
     let total = 0;
     let processed = 0;

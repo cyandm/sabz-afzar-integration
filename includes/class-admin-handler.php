@@ -52,8 +52,9 @@ class SAI_Admin_Handler
         );
 
         wp_localize_script('sai-admin-script', 'saiAdmin', [
-            'ajaxUrl' => admin_url('admin-ajax.php'),
-            'nonce'   => wp_create_nonce('sai_admin_nonce'),
+            'ajaxUrl'       => admin_url('admin-ajax.php'),
+            'nonce'         => wp_create_nonce('sai_admin_nonce'),
+            'syncBatchSize' => Sabz_Afzar_Integration::get_sync_batch_size(),
         ]);
     }
 
@@ -83,8 +84,13 @@ class SAI_Admin_Handler
         update_option('sai_enable_price_sync', !empty($_POST['sai_enable_price_sync']) ? 'yes' : 'no');
         update_option('sai_enable_stock_sync', !empty($_POST['sai_enable_stock_sync']) ? 'yes' : 'no');
         update_option('sai_enable_auto_sync', !empty($_POST['sai_enable_auto_sync']) ? 'yes' : 'no');
+        update_option('sai_use_server_cron', !empty($_POST['sai_use_server_cron']) ? 'yes' : 'no');
         update_option('sai_use_compressed_endpoint', !empty($_POST['sai_use_compressed_endpoint']) ? 'yes' : 'no');
         update_option('sai_auto_sync_interval', sanitize_text_field($_POST['sai_auto_sync_interval'] ?? 'hourly'));
+        update_option(
+            'sai_sync_batch_size',
+            max(1, min(500, (int) ($_POST['sai_sync_batch_size'] ?? 100)))
+        );
 
         update_option(
             'sai_price_unit',
@@ -108,7 +114,9 @@ class SAI_Admin_Handler
         }
 
         $offset = isset($_POST['offset']) ? max(0, (int) $_POST['offset']) : 0;
-        $limit  = isset($_POST['limit']) ? max(1, (int) $_POST['limit']) : 20;
+        $limit  = isset($_POST['limit'])
+            ? max(1, min(500, (int) $_POST['limit']))
+            : Sabz_Afzar_Integration::get_sync_batch_size();
 
         $woo = new SAI_Woo_Integration();
 

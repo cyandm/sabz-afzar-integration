@@ -243,6 +243,8 @@ class SAI_Sync_Skip_Log
                 return 'ساختار job import نامعتبر است';
             case 'sai_term_create_failed':
                 return 'ساخت term ویژگی در ووکامرس ناموفق بود';
+            case 'sai_product_in_trash':
+                return 'محصول در سطل زباله است و همگام‌سازی آن را منتشر نمی‌کند';
             default:
                 return 'خطای همگام‌سازی';
         }

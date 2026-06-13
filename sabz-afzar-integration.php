@@ -18,6 +18,7 @@ define('SAI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('SAI_PLUGIN_URL', plugin_dir_url(__FILE__));
 
 require_once SAI_PLUGIN_DIR . 'includes/class-api-service.php';
+require_once SAI_PLUGIN_DIR . 'includes/class-sync-lock.php';
 require_once SAI_PLUGIN_DIR . 'includes/class-sync-skip-log.php';
 require_once SAI_PLUGIN_DIR . 'includes/class-admin-handler.php';
 require_once SAI_PLUGIN_DIR . 'includes/class-woo-integration.php';
@@ -69,7 +70,9 @@ final class Sabz_Afzar_Integration
             'sai_enable_factor_creation'   => 'yes',
             'sai_enable_price_sync'        => 'yes',
             'sai_enable_stock_sync'        => 'yes',
-            'sai_enable_auto_sync'         => 'yes',
+            'sai_enable_auto_sync'         => 'no',
+            'sai_use_server_cron'          => 'yes',
+            'sai_sync_batch_size'          => 100,
             'sai_auto_sync_interval'       => 'hourly',
             'sai_use_compressed_endpoint'  => 'no',
         ];
@@ -88,13 +91,28 @@ final class Sabz_Afzar_Integration
     }
 
     /**
+     * تعداد job در هر batch همگام‌سازی (cron سرور، WP Cron، sync دستی).
+     * واحد batch = job گروه‌بندی‌شده (ممکن است چند variation داخل یک job باشد).
+     */
+    public static function get_sync_batch_size(): int
+    {
+        $size = (int) get_option('sai_sync_batch_size', 100);
+
+        return max(1, min(500, $size));
+    }
+
+    /**
      * زمان‌بندی کرون همگام‌سازی محصولات بر اساس تنظیمات ادمین
      */
     public static function schedule_product_sync_cron(): void
     {
         wp_clear_scheduled_hook('sai_hourly_product_sync');
 
-        if (get_option('sai_enable_auto_sync', 'yes') !== 'yes') {
+        if (get_option('sai_use_server_cron', 'no') === 'yes') {
+            return;
+        }
+
+        if (get_option('sai_enable_auto_sync', 'no') !== 'yes') {
             return;
         }
 
@@ -123,8 +141,18 @@ final class Sabz_Afzar_Integration
      */
     public function run_cron_product_sync()
     {
-        if (get_option('sai_enable_auto_sync', 'yes') !== 'yes') {
+        if (get_option('sai_use_server_cron', 'no') === 'yes') {
+            error_log('[SAI_CRON] Server cron (cron-sync.php) enabled; WP Cron sync skipped.');
+            return;
+        }
+
+        if (get_option('sai_enable_auto_sync', 'no') !== 'yes') {
             error_log('[SAI_CRON] Auto sync disabled in settings, skipping.');
+            return;
+        }
+
+        if (!SAI_Sync_Lock::acquire()) {
+            error_log('[SAI_CRON] Another sync is already running, skipping.');
             return;
         }
 
@@ -132,6 +160,7 @@ final class Sabz_Afzar_Integration
 
         if (!class_exists('WooCommerce')) {
             error_log('[SAI_CRON] WooCommerce not active, aborting.');
+            SAI_Sync_Lock::release();
             return;
         }
 
@@ -142,12 +171,13 @@ final class Sabz_Afzar_Integration
 
         if (is_wp_error($cache_result)) {
             error_log('[SAI_CRON] fetch_and_cache_products failed: ' . $cache_result->get_error_message());
+            SAI_Sync_Lock::release();
             return;
         }
 
         $total  = $cache_result['total'] ?? 0;
         $offset = 0;
-        $limit  = 20;
+        $limit  = self::get_sync_batch_size();
         $batch  = 0;
 
         error_log("[SAI_CRON] Cache ready. Total jobs: $total");
@@ -169,6 +199,7 @@ final class Sabz_Afzar_Integration
         } while ($has_more);
 
         error_log('[SAI_CRON] Hourly product sync finished. Batches: ' . $batch);
+        SAI_Sync_Lock::release();
     }
 
     public function woocommerce_notice()

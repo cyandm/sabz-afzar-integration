@@ -243,7 +243,7 @@ class SAI_API_Service
         return $headers;
     }
 
-    private function request($method, $endpoint, $body = null, $compressed = false)
+    private function request($method, $endpoint, $body = null, $compressed = false, $json_headers = true)
     {
         $url = $this->base_url . '/' . ltrim($endpoint, '/');
 
@@ -255,13 +255,15 @@ class SAI_API_Service
 
         $args = [
             'method'  => strtoupper($method),
-            'headers' => $this->get_headers(true),
+            'headers' => $this->get_headers($json_headers),
             'timeout' => 60,
         ];
 
         if ($body !== null) {
             $args['body'] = wp_json_encode($body);
         }
+
+        error_log('[SAI] Headers: ' . wp_json_encode($args['headers']));
 
         $response = wp_remote_request($url, $args);
 
@@ -365,27 +367,34 @@ class SAI_API_Service
     }
 
     /**
-     * QueryString مشتری مطابق فرمت API: email=null و introducerMobileNo=''
+     * QueryString مشتری — ۶ پارامتر Postman AddPerson (MyEshop collection).
+     * nationalCode فقط در پاسخ API است، نه در query.
+     *
+     * نمونه: firstName=...&lastName=...&mobileNo=9302365110&email=null&introducerMobileNo=''&isMale=true
      */
     private function build_customer_query_string(array $args): string
     {
-        $is_male = !empty($args['isMale']) ? 'true' : 'false';
-
         return implode('&', [
-            'firstName=' . rawurlencode((string) ($args['firstName'] ?? '')),
-            'lastName=' . rawurlencode((string) ($args['lastName'] ?? '')),
+            'firstName=' . rawurlencode(trim((string) ($args['firstName'] ?? ''))),
+            'lastName=' . rawurlencode(trim((string) ($args['lastName'] ?? ''))),
             'mobileNo=' . rawurlencode(trim((string) ($args['mobileNo'] ?? ''))),
             'email=null',
             "introducerMobileNo=''",
-            'isMale=' . $is_male,
+            'isMale=true',
         ]);
     }
 
+    /**
+     * Postman AddPerson: POST بدون body و بدون Content-Type (json_headers=false).
+     */
     public function add_customer($args = [])
     {
-        $endpoint = 'api/linkJSONEShopAddCustomer?' . $this->build_customer_query_string($args);
+        $query    = $this->build_customer_query_string($args);
+        $endpoint = 'api/linkJSONEShopAddCustomer?' . $query;
 
-        return $this->request('POST', $endpoint, null);
+        error_log('[SAI] AddCustomer query: ' . $query);
+
+        return $this->request('POST', $endpoint, null, false, false);
     }
 
     /**
@@ -394,6 +403,6 @@ class SAI_API_Service
      */
     public function add_hist_factor($payload = [])
     {
-        return $this->request('POST', 'api/linkJSONEShopAddHistFactor', $payload);
+        return $this->request('POST', 'api/LinkJSONEShopAddHistFactor', $payload);
     }
 }
