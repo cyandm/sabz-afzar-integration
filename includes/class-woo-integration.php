@@ -802,6 +802,11 @@ class SAI_Woo_Integration
         return strtoupper($size);
     }
 
+    private function has_star_marker($good_name): bool
+    {
+        return strpos((string) $good_name, '*') !== false;
+    }
+
     private function build_variation_groups(array $items)
     {
         $records = [];
@@ -812,6 +817,12 @@ class SAI_Woo_Integration
             }
 
             $good_name = isset($item['GoodName']) ? $item['GoodName'] : '';
+
+            if ($this->has_star_marker($good_name)) {
+                error_log('[SAI_SYNC] Skipped starred product: GoodCode=' . (isset($item['GoodCode']) ? $item['GoodCode'] : '') . ' | GoodName=' . $good_name);
+                continue;
+            }
+
             $group_code = isset($item['GoodGroupCode']) ? sanitize_text_field($item['GoodGroupCode']) : '';
             $group_name = isset($item['GoodGroupName']) ? sanitize_text_field($item['GoodGroupName']) : '';
             $variation = $this->extract_variation_data($good_name);
@@ -1241,7 +1252,7 @@ class SAI_Woo_Integration
         $old_sku = 'old-' . $good_code;
 
         if ($this->find_product_id_by_sku($old_sku)) {
-            $old_sku = '';
+            $old_sku = 'old-' . $good_code . '-' . time();
         }
 
         $product->set_status('draft');
@@ -1967,7 +1978,28 @@ class SAI_Woo_Integration
             return $trash_error;
         }
 
+        $good_id = isset($item['GoodId']) ? sanitize_text_field($item['GoodId']) : '';
+
         $product_id = $this->find_product_id_by_sku($good_code);
+
+        if (!$product_id && $good_id !== '') {
+            $product_by_good_id = wc_get_products([
+                'limit'      => 1,
+                'return'     => 'ids',
+                'status'     => ['draft', 'pending', 'private', 'publish', 'future'],
+                'meta_query' => [
+                    [
+                        'key'     => '_sai_good_id',
+                        'value'   => $good_id,
+                        'compare' => '=',
+                    ],
+                ],
+            ]);
+
+            if (is_array($product_by_good_id) && !empty($product_by_good_id)) {
+                $product_id = (int) $product_by_good_id[0];
+            }
+        }
 
         if ($product_id) {
             $product = wc_get_product($product_id);
@@ -1984,6 +2016,19 @@ class SAI_Woo_Integration
 
             if ($product->is_type('variation')) {
                 return new WP_Error('sai_simple_sku_conflict', 'Simple product SKU already belongs to a variation: ' . $good_code);
+            }
+
+            if ($product->get_sku() !== $good_code) {
+                $existing_sku_product_id = wc_get_product_id_by_sku($good_code);
+
+                if ($existing_sku_product_id && (int) $existing_sku_product_id !== (int) $product->get_id()) {
+                    return new WP_Error(
+                        'sai_sku_conflict',
+                        'Cannot update SKU because it already belongs to another product: ' . $good_code
+                    );
+                }
+
+                $product->set_sku($good_code);
             }
 
             $result_type = 'updated';
