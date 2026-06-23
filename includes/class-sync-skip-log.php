@@ -245,6 +245,8 @@ class SAI_Sync_Skip_Log
                 return 'ساخت term ویژگی در ووکامرس ناموفق بود';
             case 'sai_product_in_trash':
                 return 'محصول در سطل زباله است و همگام‌سازی آن را منتشر نمی‌کند';
+            case 'sai_manual_action_required':
+                return 'نیاز به اقدام دستی — محصول باید از متغیر به ساده تبدیل شود';
             default:
                 return 'خطای همگام‌سازی';
         }

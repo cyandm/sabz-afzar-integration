@@ -42,12 +42,41 @@ class SAI_Woo_Integration
         }
     }
 
+    private function clear_woocommerce_cache(): void
+    {
+        // Product transients
+        wc_delete_product_transients();
+
+        // Shop/loop transients
+        wc_delete_shop_order_transients();
+
+        // Term/attribute counts
+        delete_transient('wc_attribute_taxonomies');
+
+        if (class_exists('WC_Cache_Helper')) {
+            WC_Cache_Helper::get_transient_version('product', true);
+            WC_Cache_Helper::get_transient_version('shipping', true);
+        }
+
+        // Object cache (Redis/Memcached)
+        if (function_exists('wp_cache_flush_group')) {
+            wp_cache_flush_group('product_query');
+            wp_cache_flush_group('products');
+            wp_cache_flush_group('woocommerce');
+        } else {
+            wp_cache_flush();
+        }
+
+        error_log('[SAI_SYNC] WooCommerce cache cleared before import.');
+    }
+
     public function fetch_and_cache_products()
     {
         $file = $this->get_cache_file();
 
         $this->delete_cache_file();
         SAI_Sync_Skip_Log::clear();
+        $this->clear_woocommerce_cache();
 
         error_log('[SAI_SYNC] Fetching fresh products from API...');
 
@@ -2061,6 +2090,183 @@ class SAI_Woo_Integration
         error_log('[SAI_SYNC] ' . strtoupper($result_type) . ': SKU=' . $good_code . ' | Name=' . $good_name);
 
         return $result_type;
+    }
+
+    /**
+     * Force products that are marked as simple in the cache to be simple in WooCommerce.
+     * If they are currently variable or have attributes/variations, those are removed first.
+     *
+     * @return array{fixed:int,skipped:int,errors:array<int,string>}
+     */
+    public function force_simple_products_from_cache(): array
+    {
+        $jobs = $this->load_cached_products();
+
+        if (empty($jobs)) {
+            return [
+                'fixed'   => 0,
+                'skipped' => 0,
+                'errors'  => ['Cache not found or empty'],
+            ];
+        }
+
+        $fixed   = 0;
+        $skipped = 0;
+        $errors  = [];
+
+        foreach ($jobs as $job) {
+            if (!is_array($job) || !isset($job['type']) || $job['type'] !== 'simple') {
+                continue;
+            }
+
+            $items    = isset($job['items']) && is_array($job['items']) ? $job['items'] : [];
+            $raw_item = reset($items);
+            $item     = is_array($raw_item) && isset($raw_item['item']) ? $raw_item['item'] : $raw_item;
+
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $good_code = isset($item['GoodCode']) ? sanitize_text_field($item['GoodCode']) : '';
+            $good_id   = isset($item['GoodId'])   ? sanitize_text_field($item['GoodId'])   : '';
+
+            if ($good_code === '') {
+                continue;
+            }
+
+            $product_id = $this->find_product_id_by_sku($good_code);
+
+            // fallback: search by GoodId meta
+            if (!$product_id && $good_id !== '') {
+                $found = wc_get_products([
+                    'limit'      => 1,
+                    'return'     => 'ids',
+                    'status'     => ['draft', 'pending', 'private', 'publish', 'future'],
+                    'meta_query' => [[
+                        'key'     => '_sai_good_id',
+                        'value'   => $good_id,
+                        'compare' => '=',
+                    ]],
+                ]);
+
+                if (is_array($found) && !empty($found)) {
+                    $product_id = (int) $found[0];
+                }
+            }
+
+            if (!$product_id) {
+                $skipped++;
+                continue;
+            }
+
+            $product = wc_get_product($product_id);
+
+            if (!$product) {
+                $skipped++;
+                continue;
+            }
+
+            // Already simple — nothing to do
+            if ($product->is_type('simple')) {
+                $skipped++;
+                continue;
+            }
+
+            error_log('[SAI_SYNC] force_simple: converting SKU=' . $good_code . ' | type=' . $product->get_type() . ' | ID=' . $product_id);
+
+            // If it is a variation — we need to work on the parent
+            if ($product->is_type('variation')) {
+                $parent_id = (int) $product->get_parent_id();
+
+                $result = $this->detach_variation_and_make_simple($product_id, $parent_id, $item);
+
+                if (is_wp_error($result)) {
+                    $errors[] = 'SKU ' . $good_code . ': ' . $result->get_error_message();
+                    continue;
+                }
+
+                $fixed++;
+                continue;
+            }
+
+            // If it is variable — convert the product itself to simple
+            if ($product->is_type('variable')) {
+                $result = $this->convert_variable_to_simple($product_id, $item);
+
+                if (is_wp_error($result)) {
+                    $errors[] = 'SKU ' . $good_code . ': ' . $result->get_error_message();
+                    continue;
+                }
+
+                $fixed++;
+                continue;
+            }
+
+            // Any other type (grouped etc.) — just log and skip
+            $errors[] = 'SKU ' . $good_code . ': unsupported product type ' . $product->get_type();
+        }
+
+        error_log('[SAI_SYNC] force_simple finished | fixed=' . $fixed . ' | skipped=' . $skipped . ' | errors=' . count($errors));
+
+        return [
+            'fixed'   => $fixed,
+            'skipped' => $skipped,
+            'errors'  => $errors,
+        ];
+    }
+
+    /**
+     * Detach a variation from its parent and re-create it as a standalone simple product.
+     * If the parent has no remaining variations after detach, the parent is trashed.
+     *
+     * @return true|WP_Error
+     */
+    private function detach_variation_and_make_simple(int $variation_id, int $parent_id, array $item)
+    {
+        $good_code = isset($item['GoodCode']) ? sanitize_text_field($item['GoodCode']) : '';
+        $good_name = isset($item['GoodName']) ? sanitize_text_field($item['GoodName']) : $good_code;
+
+        $parent_sku = '';
+        if ($parent_id > 0) {
+            $parent     = wc_get_product($parent_id);
+            $parent_sku = $parent ? sanitize_text_field($parent->get_sku()) : '';
+        }
+
+        $message = sprintf(
+            'محصول "%s" (GoodCode=%s) در ووکامرس به‌عنوان variation ثبت شده (variation ID=%d، parent ID=%d، parent SKU=%s). این محصول باید ساده (simple) باشد. لطفاً به‌صورت دستی: ۱) SKU parent را به %s تغییر دهید ۲) variationها را حذف کنید ۳) attributeها را پاک کنید ۴) نوع محصول را به Simple تغییر دهید و ذخیره کنید.',
+            $good_name,
+            $good_code,
+            $variation_id,
+            $parent_id,
+            $parent_sku,
+            $good_code
+        );
+
+        error_log('[SAI_SYNC] MANUAL ACTION REQUIRED: ' . $message);
+
+        return new WP_Error('sai_manual_action_required', $message);
+    }
+
+    private function convert_variable_to_simple(int $product_id, array $item)
+    {
+        $good_code = isset($item['GoodCode']) ? sanitize_text_field($item['GoodCode']) : '';
+        $good_name = isset($item['GoodName']) ? sanitize_text_field($item['GoodName']) : $good_code;
+
+        $product    = wc_get_product($product_id);
+        $parent_sku = $product ? sanitize_text_field($product->get_sku()) : '';
+
+        $message = sprintf(
+            'محصول "%s" (GoodCode=%s) در ووکامرس به‌عنوان variable ثبت شده (product ID=%d، SKU=%s). این محصول باید ساده (simple) باشد. لطفاً به‌صورت دستی: ۱) SKU را به %s تغییر دهید ۲) variationها را حذف کنید ۳) attributeها را پاک کنید ۴) نوع محصول را به Simple تغییر دهید و ذخیره کنید.',
+            $good_name,
+            $good_code,
+            $product_id,
+            $parent_sku,
+            $good_code
+        );
+
+        error_log('[SAI_SYNC] MANUAL ACTION REQUIRED: ' . $message);
+
+        return new WP_Error('sai_manual_action_required', $message);
     }
 
     /**
