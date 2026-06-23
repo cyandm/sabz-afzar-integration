@@ -168,7 +168,7 @@ final class Sabz_Afzar_Integration
             error_log('[SAI_CRON] fetch_and_cache_products failed: ' . $error_message);
             SAI_Sync_Lock::release();
 
-            SAI_Cron_Activity_Log::append([
+            SAI_Cron_Activity_Log::save_run([
                 'source'                 => 'wp_cron',
                 'started_at'             => $started_at,
                 'finished_at'            => date('Y-m-d H:i:s'),
@@ -179,6 +179,7 @@ final class Sabz_Afzar_Integration
                 'updated'                => 0,
                 'skipped'                => 0,
                 'manual_action_required' => 0,
+                'manual_action_errors'   => [],
                 'batches'                => 0,
                 'status'                 => 'failed',
                 'error_message'          => $error_message,
@@ -230,7 +231,7 @@ final class Sabz_Afzar_Integration
 
         error_log('[SAI_CRON] Hourly product sync finished. Batches: ' . $batch);
 
-        SAI_Cron_Activity_Log::append([
+        SAI_Cron_Activity_Log::save_run([
             'source'                 => 'wp_cron',
             'started_at'             => $started_at,
             'finished_at'            => $finished_at,
@@ -241,6 +242,7 @@ final class Sabz_Afzar_Integration
             'updated'                => $updated,
             'skipped'                => $skipped,
             'manual_action_required' => $manual_action_needed,
+            'manual_action_errors'   => is_array($force_result['errors'] ?? null) ? $force_result['errors'] : [],
             'batches'                => $batch,
             'status'                 => $batch_failed ? 'failed' : 'ok',
             'error_message'          => $error_message,

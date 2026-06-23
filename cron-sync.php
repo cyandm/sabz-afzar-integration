@@ -113,7 +113,7 @@ if (is_wp_error($cache_result)) {
     echo '[SAI_CRON] ERROR fetching products: ' . $error_message . PHP_EOL;
     SAI_Sync_Lock::release();
 
-    SAI_Cron_Activity_Log::append([
+    SAI_Cron_Activity_Log::save_run([
         'source'                 => 'server_cron',
         'started_at'             => $started_at,
         'finished_at'            => date('Y-m-d H:i:s'),
@@ -124,6 +124,7 @@ if (is_wp_error($cache_result)) {
         'updated'                => 0,
         'skipped'                => 0,
         'manual_action_required' => 0,
+        'manual_action_errors'   => [],
         'batches'                => 0,
         'status'                 => 'failed',
         'error_message'          => $error_message,
@@ -211,8 +212,8 @@ if ($batch_failed) {
 
 echo '========================================' . PHP_EOL;
 
-// ذخیره لاگ فعالیت
-SAI_Cron_Activity_Log::append([
+// ذخیره گزارش آخرین اجرا
+SAI_Cron_Activity_Log::save_run([
     'source'                 => 'server_cron',
     'started_at'             => $started_at,
     'finished_at'            => $finished_at,
@@ -223,6 +224,7 @@ SAI_Cron_Activity_Log::append([
     'updated'                => $updated,
     'skipped'                => $skipped,
     'manual_action_required' => $manual_action_needed,
+    'manual_action_errors'   => is_array($force_result['errors'] ?? null) ? $force_result['errors'] : [],
     'batches'                => $batch,
     'status'                 => $status,
     'error_message'          => $error_message,
