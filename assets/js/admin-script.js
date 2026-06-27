@@ -58,17 +58,18 @@ jQuery(function ($) {
 
   function renderSkipLogList(options) {
     options = options || {};
+    const lines = Array.isArray(options.lines) ? options.lines : skipLogLines;
     const hidden = parseInt(options.skip_log_hidden || 0, 10);
     const total = parseInt(
-      options.skip_log_total != null ? options.skip_log_total : skipLogLines.length,
+      options.skip_log_total != null ? options.skip_log_total : lines.length,
       10,
     );
 
-    if (skipLogLines.length === 0) {
+    if (lines.length === 0) {
       return "";
     }
 
-    const displayLines = skipLogLines.slice(0, SKIP_LOG_UI_MAX);
+    const displayLines = lines.slice(0, SKIP_LOG_UI_MAX);
     let html =
       '<div class="sai-skip-log">' +
       '<p class="sai-skip-log-title">جزئیات رد شده (' +
@@ -124,6 +125,7 @@ jQuery(function ($) {
     options = options || {};
     const mode = options.mode || "sync";
     const finished = !!options.finished;
+    const target = options.target || "#sai-report-result";
 
     if (mode === "remediation") {
       const errors = Array.isArray(options.errors) ? options.errors : [];
@@ -167,7 +169,7 @@ jQuery(function ($) {
       }
 
       html += "</div>";
-      $("#sai-report-result").html(html);
+      $(target).html(html);
       return;
     }
 
@@ -187,7 +189,7 @@ jQuery(function ($) {
         '<p class="sai-report-note">رد شده: job یا variationهایی که وارد نشدند (مثلاً attribute رنگ/سایز در ووکامرس پیدا نشد).</p>';
     }
 
-    $("#sai-report-result").html(
+    $(target).html(
       '<div class="sai-report-panel">' +
         '<div class="sai-report-title">' +
         escapeHtml(title) +
@@ -203,6 +205,103 @@ jQuery(function ($) {
         renderSkipLogList(options) +
         "</div>",
     );
+  }
+
+  function renderAutoSyncReport(report) {
+    if (!report || !report.has_report) {
+      return;
+    }
+
+    const status = report.status === "failed" ? "failed" : "ok";
+    const statusLabel = status === "failed" ? "ناموفق" : "موفق";
+    const statusClass =
+      status === "failed" ? "sai-auto-sync-status-failed" : "sai-auto-sync-status-ok";
+
+    let title = "آخرین همگام‌سازی خودکار";
+    if (report.human_finished) {
+      title += " — " + report.human_finished;
+    }
+
+    let html =
+      '<div class="sai-report-panel">' +
+      '<div class="sai-report-title">' +
+      escapeHtml(title) +
+      "</div>" +
+      '<div class="sai-auto-sync-meta">' +
+      '<span>' +
+      escapeHtml(report.source_label || "") +
+      "</span>" +
+      '<span class="' +
+      statusClass +
+      '">' +
+      escapeHtml(statusLabel) +
+      "</span>";
+
+    if (report.duration_seconds) {
+      html +=
+        '<span dir="ltr">' +
+        escapeHtml(report.duration_seconds) +
+        "s</span>";
+    }
+
+    html += "</div>";
+
+    if (status === "failed" && report.error_message) {
+      html +=
+        '<p class="sai-auto-sync-error">' +
+        escapeHtml(report.error_message) +
+        "</p>";
+    }
+
+    html +=
+      '<ul class="sai-report-stats">' +
+      renderReportStatRow("مجموع (job)", report.total_jobs || 0) +
+      renderReportStatRow("ساخته‌شده", report.created || 0, "sai-stat-created") +
+      renderReportStatRow("آپدیت‌شده", report.updated || 0, "sai-stat-updated") +
+      renderReportStatRow("رد شده", report.skipped || 0, "sai-stat-skipped");
+
+    if (parseInt(report.manual_action_required || 0, 10) > 0) {
+      html += renderReportStatRow(
+        "نیاز به اقدام دستی",
+        report.manual_action_required,
+        "sai-stat-skipped",
+      );
+    }
+
+    html +=
+      renderReportStatRow("batchها", report.batches || 0) +
+      "</ul>";
+
+    const manualErrors = Array.isArray(report.manual_action_errors)
+      ? report.manual_action_errors
+      : [];
+
+    if (manualErrors.length > 0) {
+      html +=
+        '<p class="sai-report-note">محصولات نیازمند اقدام دستی:</p><ul class="sai-report-errors">';
+      manualErrors.slice(0, 5).forEach(function (err) {
+        html += "<li>" + escapeHtml(err) + "</li>";
+      });
+      if (manualErrors.length > 5) {
+        html += "<li>…</li>";
+      }
+      html += "</ul>";
+    }
+
+    if (parseInt(report.skipped || 0, 10) > 0) {
+      html +=
+        '<p class="sai-report-note">رد شده: job یا variationهایی که وارد نشدند (مثلاً attribute رنگ/سایز در ووکامرس پیدا نشد).</p>';
+    }
+
+    html += renderSkipLogList({
+      lines: report.skip_log_lines || [],
+      skip_log_total: report.skip_log_total,
+      skip_log_hidden: report.skip_log_hidden,
+    });
+
+    html += "</div>";
+
+    $("#sai-auto-sync-report-result").html(html);
   }
 
   function renderProgress(stats) {
@@ -554,4 +653,12 @@ jQuery(function ($) {
       renderMessage(msg, false);
     });
   });
+
+  if (
+    typeof saiAdmin !== "undefined" &&
+    saiAdmin.lastAutoSyncReport &&
+    saiAdmin.lastAutoSyncReport.has_report
+  ) {
+    renderAutoSyncReport(saiAdmin.lastAutoSyncReport);
+  }
 });

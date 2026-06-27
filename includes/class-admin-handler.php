@@ -52,9 +52,10 @@ class SAI_Admin_Handler
         );
 
         wp_localize_script('sai-admin-script', 'saiAdmin', [
-            'ajaxUrl'       => admin_url('admin-ajax.php'),
-            'nonce'         => wp_create_nonce('sai_admin_nonce'),
-            'syncBatchSize' => Sabz_Afzar_Integration::get_sync_batch_size(),
+            'ajaxUrl'            => admin_url('admin-ajax.php'),
+            'nonce'              => wp_create_nonce('sai_admin_nonce'),
+            'syncBatchSize'      => Sabz_Afzar_Integration::get_sync_batch_size(),
+            'lastAutoSyncReport' => SAI_Cron_Activity_Log::get_ui_payload(),
         ]);
     }
 

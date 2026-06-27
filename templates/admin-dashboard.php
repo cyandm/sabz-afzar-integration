@@ -189,9 +189,9 @@ if (!defined('ABSPATH')) {
             </div>
 
             <div class="sai-card">
-                <p class="title">گزارش همگام سازی خودکار</p>
+                <p class="title">گزارش همگام‌سازی خودکار</p>
                 <div id="sai-auto-sync-report-result">
-                    <p class="sai-auto-sync-report-empty">پس از شروع همگام سازی خودکار، آمار ساخته‌شده، آپدیت‌شده و رد شده اینجا نمایش داده می‌شود.</p>
+                    <p class="sai-auto-sync-report-empty">پس از اجرای cron، آمار آخرین همگام‌سازی خودکار (ساخته‌شده، آپدیت‌شده و رد شده) اینجا نمایش داده می‌شود.</p>
                 </div>
             </div>
         </div>
