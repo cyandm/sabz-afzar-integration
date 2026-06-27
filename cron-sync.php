@@ -84,19 +84,51 @@ if (!SAI_Sync_Lock::acquire()) {
 // ----------------------------------------------------------------
 
 $start        = microtime(true);
+$started_at   = date('Y-m-d H:i:s');
 $batch_failed = false;
+$error_message = '';
 
-echo '[SAI_CRON] Product sync started at ' . date('Y-m-d H:i:s') . PHP_EOL;
+$created              = 0;
+$updated              = 0;
+$skipped              = 0;
+$manual_action_needed = 0;
+$batch                = 0;
+$total                = 0;
+$raw                  = 0;
+
+echo '[SAI_CRON] Product sync started at ' . $started_at . PHP_EOL;
 
 $woo = new SAI_Woo_Integration();
+
+// ----------------------------------------------------------------
+// مرحله ۱: دریافت محصولات از API و ذخیره در کش
+// ----------------------------------------------------------------
 
 echo '[SAI_CRON] Fetching products from Sabz Afzar API...' . PHP_EOL;
 
 $cache_result = $woo->fetch_and_cache_products();
 
 if (is_wp_error($cache_result)) {
-    echo '[SAI_CRON] ERROR fetching products: ' . $cache_result->get_error_message() . PHP_EOL;
+    $error_message = $cache_result->get_error_message();
+    echo '[SAI_CRON] ERROR fetching products: ' . $error_message . PHP_EOL;
     SAI_Sync_Lock::release();
+
+    SAI_Cron_Activity_Log::append([
+        'source'                 => 'server_cron',
+        'started_at'             => $started_at,
+        'finished_at'            => date('Y-m-d H:i:s'),
+        'duration_seconds'       => round(microtime(true) - $start, 2),
+        'total_jobs'             => 0,
+        'raw_total'              => 0,
+        'created'                => 0,
+        'updated'                => 0,
+        'skipped'                => 0,
+        'manual_action_required' => 0,
+        'batches'                => 0,
+        'status'                 => 'failed',
+        'error_message'          => $error_message,
+    ]);
+
     exit(1);
 }
 
@@ -105,14 +137,32 @@ $raw   = $cache_result['raw_total'] ?? 0;
 
 echo "[SAI_CRON] API returned $raw items → $total import jobs cached." . PHP_EOL;
 
-$offset  = 0;
-$limit   = Sabz_Afzar_Integration::get_sync_batch_size();
-$batch   = 0;
+// ----------------------------------------------------------------
+// مرحله ۲: بررسی و لاگ محصولاتی که باید ساده باشن ولی متغیرن
+// ----------------------------------------------------------------
 
-echo "[SAI_CRON] Batch size : $limit jobs per iteration" . PHP_EOL;
-$created = 0;
-$updated = 0;
-$skipped = 0;
+echo '[SAI_CRON] Checking for products that need manual fix (variable → simple)...' . PHP_EOL;
+
+$force_result = $woo->force_simple_products_from_cache();
+$manual_action_needed = count($force_result['errors'] ?? []);
+
+if ($manual_action_needed > 0) {
+    echo "[SAI_CRON] ⚠ $manual_action_needed product(s) need manual action:" . PHP_EOL;
+    foreach ($force_result['errors'] as $err) {
+        echo '  - ' . $err . PHP_EOL;
+    }
+} else {
+    echo '[SAI_CRON] No manual fixes required.' . PHP_EOL;
+}
+
+// ----------------------------------------------------------------
+// مرحله ۳: import دسته‌ای
+// ----------------------------------------------------------------
+
+$limit = Sabz_Afzar_Integration::get_sync_batch_size();
+$offset = 0;
+
+echo "[SAI_CRON] Batch size: $limit jobs per iteration" . PHP_EOL;
 
 do {
     $batch++;
@@ -121,7 +171,8 @@ do {
     $result = $woo->sync_products_from_cache_batch($offset, $limit);
 
     if (is_wp_error($result)) {
-        echo '[SAI_CRON] ERROR in batch: ' . $result->get_error_message() . PHP_EOL;
+        $error_message = $result->get_error_message();
+        echo '[SAI_CRON] ERROR in batch: ' . $error_message . PHP_EOL;
         $batch_failed = true;
         break;
     }
@@ -138,16 +189,19 @@ do {
 // ۵. گزارش نهایی
 // ----------------------------------------------------------------
 
-$elapsed = round(microtime(true) - $start, 2);
+$finished_at = date('Y-m-d H:i:s');
+$elapsed     = round(microtime(true) - $start, 2);
+$status      = $batch_failed ? 'failed' : 'ok';
 
 echo PHP_EOL;
 echo '========================================' . PHP_EOL;
-echo '[SAI_CRON] Sync finished at ' . date('Y-m-d H:i:s') . PHP_EOL;
-echo "[SAI_CRON] Duration   : {$elapsed}s" . PHP_EOL;
-echo "[SAI_CRON] Batches    : $batch" . PHP_EOL;
-echo "[SAI_CRON] Created    : $created" . PHP_EOL;
-echo "[SAI_CRON] Updated    : $updated" . PHP_EOL;
-echo "[SAI_CRON] Skipped    : $skipped" . PHP_EOL;
+echo '[SAI_CRON] Sync finished at ' . $finished_at . PHP_EOL;
+echo "[SAI_CRON] Duration              : {$elapsed}s" . PHP_EOL;
+echo "[SAI_CRON] Batches               : $batch" . PHP_EOL;
+echo "[SAI_CRON] Created               : $created" . PHP_EOL;
+echo "[SAI_CRON] Updated               : $updated" . PHP_EOL;
+echo "[SAI_CRON] Skipped               : $skipped" . PHP_EOL;
+echo "[SAI_CRON] Manual action needed  : $manual_action_needed" . PHP_EOL;
 
 if ($batch_failed) {
     echo '[SAI_CRON] Status     : FAILED (batch error)' . PHP_EOL;
@@ -156,6 +210,23 @@ if ($batch_failed) {
 }
 
 echo '========================================' . PHP_EOL;
+
+// ذخیره لاگ فعالیت
+SAI_Cron_Activity_Log::append([
+    'source'                 => 'server_cron',
+    'started_at'             => $started_at,
+    'finished_at'            => $finished_at,
+    'duration_seconds'       => $elapsed,
+    'total_jobs'             => $total,
+    'raw_total'              => $raw,
+    'created'                => $created,
+    'updated'                => $updated,
+    'skipped'                => $skipped,
+    'manual_action_required' => $manual_action_needed,
+    'batches'                => $batch,
+    'status'                 => $status,
+    'error_message'          => $error_message,
+]);
 
 SAI_Sync_Lock::release();
 

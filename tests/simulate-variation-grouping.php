@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Variation grouping / color parsing simulation.
  * Run: php tests/simulate-variation-grouping.php

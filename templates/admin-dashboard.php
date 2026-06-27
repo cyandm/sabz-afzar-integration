@@ -187,6 +187,13 @@ if (!defined('ABSPATH')) {
                     <p class="sai-report-empty">پس از شروع همگام‌سازی، آمار ساخته‌شده، آپدیت‌شده و رد شده اینجا نمایش داده می‌شود.</p>
                 </div>
             </div>
+
+            <div class="sai-card">
+                <p class="title">گزارش همگام سازی خودکار</p>
+                <div id="sai-auto-sync-report-result">
+                    <p class="sai-auto-sync-report-empty">پس از شروع همگام سازی خودکار، آمار ساخته‌شده، آپدیت‌شده و رد شده اینجا نمایش داده می‌شود.</p>
+                </div>
+            </div>
         </div>
 
     </div>
