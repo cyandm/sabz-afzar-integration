@@ -78,20 +78,18 @@ jQuery(function ($) {
       '<ul class="sai-skip-log-list">';
 
     displayLines.forEach(function (entry) {
-      const code = entry.error_code || "";
-      const message = entry.error_message || "";
-      const english =
-        code + (code && message ? ": " : "") + (code ? message : message);
+      const detail = entry.detail_fa || "";
 
-      html +=
-        "<li>" +
-        escapeHtml(entry.line_fa) +
-        (english
-          ? ' <code dir="ltr" class="sai-skip-log-code">' +
-            escapeHtml(english) +
-            "</code>"
-          : "") +
-        "</li>";
+      html += "<li>" + escapeHtml(entry.line_fa);
+
+      if (detail && detail !== entry.line_fa) {
+        html +=
+          ' <span class="sai-skip-log-detail">' +
+          escapeHtml(detail) +
+          "</span>";
+      }
+
+      html += "</li>";
     });
 
     html += "</ul>";
@@ -132,7 +130,7 @@ jQuery(function ($) {
       let html =
         '<div class="sai-report-panel">' +
         '<div class="sai-report-title">' +
-        escapeHtml(options.title || "گزارش تبدیل variation") +
+        escapeHtml(options.title || "گزارش تبدیل نسخه‌های متغیر") +
         "</div>" +
         '<ul class="sai-report-stats">' +
         renderReportStatRow(
@@ -186,7 +184,7 @@ jQuery(function ($) {
     let note = "";
     if (finished && skipped > 0) {
       note =
-        '<p class="sai-report-note">رد شده: job یا variationهایی که وارد نشدند (مثلاً attribute رنگ/سایز در ووکامرس پیدا نشد).</p>';
+        '<p class="sai-report-note">رد شده: دسته‌های همگام‌سازی یا نسخه‌های متغیری که وارد نشدند (مثلاً وقتی ویژگی رنگ یا سایز در ووکامرس پیدا نشد).</p>';
     }
 
     $(target).html(
@@ -195,7 +193,7 @@ jQuery(function ($) {
         escapeHtml(title) +
         "</div>" +
         '<ul class="sai-report-stats">' +
-        renderReportStatRow("مجموع (job)", total) +
+        renderReportStatRow("مجموع (دسته)", total) +
         renderReportStatRow("پردازش‌شده", processed) +
         renderReportStatRow("ساخته‌شده", created, "sai-stat-created") +
         renderReportStatRow("آپدیت‌شده", updated, "sai-stat-updated") +
@@ -255,7 +253,7 @@ jQuery(function ($) {
 
     html +=
       '<ul class="sai-report-stats">' +
-      renderReportStatRow("مجموع (job)", report.total_jobs || 0) +
+      renderReportStatRow("مجموع (دسته)", report.total_jobs || 0) +
       renderReportStatRow("ساخته‌شده", report.created || 0, "sai-stat-created") +
       renderReportStatRow("آپدیت‌شده", report.updated || 0, "sai-stat-updated") +
       renderReportStatRow("رد شده", report.skipped || 0, "sai-stat-skipped");
@@ -290,7 +288,7 @@ jQuery(function ($) {
 
     if (parseInt(report.skipped || 0, 10) > 0) {
       html +=
-        '<p class="sai-report-note">رد شده: job یا variationهایی که وارد نشدند (مثلاً attribute رنگ/سایز در ووکامرس پیدا نشد).</p>';
+        '<p class="sai-report-note">رد شده: دسته‌های همگام‌سازی یا نسخه‌های متغیری که وارد نشدند (مثلاً وقتی ویژگی رنگ یا سایز در ووکامرس پیدا نشد).</p>';
     }
 
     html += renderSkipLogList({
@@ -318,7 +316,7 @@ jQuery(function ($) {
         escapeHtml(processed) +
         " / " +
         escapeHtml(total) +
-        " job (" +
+        " دسته (" +
         escapeHtml(percent) +
         "%)</div>" +
         '<div class="sai-status-progress-bar">' +
@@ -586,7 +584,7 @@ jQuery(function ($) {
 
     isSyncRunning = true;
     setButtonsDisabled(true);
-    renderMessage("در حال تبدیل محصولات simple جاافتاده به variation...", true);
+    renderMessage("در حال تبدیل محصولات سادهٔ جاافتاده به نسخهٔ متغیر...", true);
 
     $.post(
       saiAdmin.ajaxUrl,
@@ -619,7 +617,7 @@ jQuery(function ($) {
           },
           {
             mode: "remediation",
-            title: "تبدیل variationهای جاافتاده",
+            title: "تبدیل نسخه‌های متغیر جاافتاده",
             errors: errors,
           },
         );

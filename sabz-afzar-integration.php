@@ -3,7 +3,7 @@
 /**
  * Plugin Name: همگام سازی سبز
  * Description: همگام سازی محصولات، ساخت حساب کاربری و فاکتور در نرم افزار حسابداری سبز
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: Amirali Dizabadi
  * Text Domain: sabz-afzar-integration
  */
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('SAI_VERSION', '1.0.0');
+define('SAI_VERSION', '1.0.1');
 define('SAI_PLUGIN_FILE', __FILE__);
 define('SAI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('SAI_PLUGIN_URL', plugin_dir_url(__FILE__));

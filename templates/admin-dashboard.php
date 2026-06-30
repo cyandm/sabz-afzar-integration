@@ -128,7 +128,7 @@ if (!defined('ABSPATH')) {
                 </div>
 
                 <div class="sai-field">
-                    <label for="sai_sync_batch_size">تعداد job در هر batch</label>
+                    <label for="sai_sync_batch_size">تعداد دسته در هر batch</label>
                     <input
                         type="number"
                         id="sai_sync_batch_size"
@@ -138,7 +138,7 @@ if (!defined('ABSPATH')) {
                         step="1"
                         value="<?php echo esc_attr((string) Sabz_Afzar_Integration::get_sync_batch_size()); ?>">
                     <p class="description">
-                        برای cron سرور، WP Cron و sync دستی اعمال می‌شود. واحد batch = یک job گروه‌بندی‌شده (مثلاً یک محصول متغیر با چند variation = یک job).
+                        برای cron سرور، WP Cron و sync دستی اعمال می‌شود. هر batch = یک دستهٔ گروه‌بندی‌شده (مثلاً یک محصول متغیر با چند نسخه = یک دسته).
                         پیشنهاد هاست: ۵۰ تا ۱۵۰؛ برای ۲۰۰۰+ محصول می‌توانید ۱۰۰–۲۰۰ امتحان کنید.
                     </p>
                 </div>
@@ -168,7 +168,7 @@ if (!defined('ABSPATH')) {
                     <button type="submit" class="button button-primary">ذخیره تنظیمات</button>
                     <button type="button" class="button" id="sai-test-connection">بررسی ارتباط</button>
                     <button type="button" class="button" id="sai-manual-sync">شروع درون ریزی و آپدیت محصولات</button>
-                    <button type="button" class="button" id="sai-remediate-variations">تبدیل variationهای جاافتاده</button>
+                    <button type="button" class="button" id="sai-remediate-variations">تبدیل نسخه‌های متغیر جاافتاده</button>
                 </div>
             </form>
         </div>

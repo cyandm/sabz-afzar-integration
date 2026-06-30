@@ -413,4 +413,81 @@ if ($tablo_variable_job === null) {
     }
 }
 
+echo PHP_EOL . '--- Simple product: تست (no color/size) ---' . PHP_EOL;
+
+assert_variation_parse($sim, 'Plain name: تست', 'تست', null, null, null);
+
+$tst_item = [
+    'GoodId'        => 212807,
+    'GoodCode'      => '5494',
+    'GoodName'      => 'تست',
+    'GoodGroupCode' => '5',
+    'GoodGroupName' => 'عطر',
+];
+$tst_jobs = $sim->simulateBuildGroups([$tst_item]);
+$tst_simple_job = null;
+
+foreach ($tst_jobs as $job) {
+    if (is_array($job) && ($job['type'] ?? '') === 'simple') {
+        $tst_simple_job = $job;
+        break;
+    }
+}
+
+if ($tst_simple_job === null) {
+    echo "  FAIL: expected one simple job for تست" . PHP_EOL;
+    $failures++;
+} else {
+    echo '  OK: type=simple' . PHP_EOL;
+
+    if (isset($tst_simple_job['attributes'])) {
+        echo "  FAIL: simple job must not have attributes" . PHP_EOL;
+        $failures++;
+    }
+
+    $tst_good_code = $tst_simple_job['items'][0]['GoodCode'] ?? '';
+
+    if ($tst_good_code !== '5494') {
+        echo "  FAIL: expected GoodCode=5494 in simple job" . PHP_EOL;
+        $failures++;
+    }
+}
+
+echo PHP_EOL . '--- Variable product: تست مشکی ---' . PHP_EOL;
+
+$tst_meshki_item = [
+    'GoodCode'      => '5495',
+    'GoodName'      => 'تست مشکی',
+    'GoodGroupCode' => '5',
+    'GoodGroupName' => 'عطر',
+];
+$tst_meshki_jobs = $sim->simulateBuildGroups([$tst_meshki_item]);
+$tst_variable_job = null;
+
+foreach ($tst_meshki_jobs as $job) {
+    if (is_array($job) && ($job['type'] ?? '') === 'variable') {
+        $tst_variable_job = $job;
+        break;
+    }
+}
+
+if ($tst_variable_job === null) {
+    echo "  FAIL: expected one variable group for تست مشکی" . PHP_EOL;
+    $failures++;
+} else {
+    echo '  parent: ' . ($tst_variable_job['parent_name'] ?? '') . PHP_EOL;
+
+    if (($tst_variable_job['parent_name'] ?? '') !== 'تست') {
+        echo "  FAIL: expected parent=تست" . PHP_EOL;
+        $failures++;
+    }
+
+    $meshki_colors = $tst_variable_job['attributes']['color'] ?? [];
+
+    if (!in_array('مشکی', $meshki_colors, true)) {
+        echo "  FAIL: missing color option مشکی" . PHP_EOL;
+        $failures++;
+    }
+}
+
 exit($failures > 0 ? 1 : 0);

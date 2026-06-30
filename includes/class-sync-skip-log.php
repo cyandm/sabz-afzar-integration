@@ -108,7 +108,7 @@ class SAI_Sync_Skip_Log
 
     /**
      * @param array<int, array<string, string>> $entries
-     * @return array<int, array{line_fa: string, error_code: string, error_message: string}>
+     * @return array<int, array{line_fa: string, detail_fa: string}>
      */
     public static function format_entries_for_ui(array $entries): array
     {
@@ -119,14 +119,38 @@ class SAI_Sync_Skip_Log
                 continue;
             }
 
+            $error_code    = (string) ($entry['error_code'] ?? '');
+            $error_message = (string) ($entry['error_message'] ?? '');
+            $reason_fa     = (string) ($entry['reason_fa'] ?? self::map_reason_fa($error_code, $error_message));
+            $detail_fa     = self::map_detail_fa($error_code, $error_message, $reason_fa);
+
             $formatted[] = [
-                'line_fa'        => self::format_line_fa($entry),
-                'error_code'     => (string) ($entry['error_code'] ?? ''),
-                'error_message'  => (string) ($entry['error_message'] ?? ''),
+                'line_fa'   => self::format_line_fa(array_merge($entry, ['reason_fa' => $reason_fa])),
+                'detail_fa' => ($detail_fa !== $reason_fa) ? $detail_fa : '',
             ];
         }
 
         return $formatted;
+    }
+
+    /**
+     * @return string پیام فارسی برای خطاهای force_simple و گزارش cron
+     */
+    public static function format_product_error_fa(string $good_code, WP_Error $error): string
+    {
+        $code   = sanitize_text_field($good_code);
+        $reason = self::map_reason_fa($error->get_error_code(), $error->get_error_message());
+        $detail = self::map_detail_fa($error->get_error_code(), $error->get_error_message(), $reason);
+
+        if ($code === '') {
+            return $detail !== '' ? $detail : $reason;
+        }
+
+        if ($detail !== '' && $detail !== $reason) {
+            return 'کد ' . $code . ': ' . $detail;
+        }
+
+        return 'کد ' . $code . ': ' . $reason;
     }
 
     public static function get_ui_payload(): array
@@ -209,44 +233,146 @@ class SAI_Sync_Skip_Log
         return '—';
     }
 
+    private static function extract_message_suffix(string $error_message): string
+    {
+        if (preg_match('/:\s*(.+)$/u', $error_message, $matches)) {
+            return trim($matches[1]);
+        }
+
+        return '';
+    }
+
+    private static function translate_attribute_term_list(string $terms_part): string
+    {
+        $terms_part = trim($terms_part);
+
+        if ($terms_part === '') {
+            return '';
+        }
+
+        $parts = array_map('trim', explode(',', $terms_part));
+        $translated = [];
+
+        foreach ($parts as $part) {
+            if (preg_match('/^(color|size)\s*:\s*(.+)$/iu', $part, $matches)) {
+                $label = strtolower($matches[1]) === 'size' ? 'سایز' : 'رنگ';
+                $translated[] = $label . ': ' . trim($matches[2]);
+                continue;
+            }
+
+            $translated[] = $part;
+        }
+
+        return implode('، ', $translated);
+    }
+
+    private static function map_detail_fa(string $error_code, string $error_message, string $reason_fa): string
+    {
+        if ($error_code === 'sai_missing_wc_attribute_term') {
+            $terms_part = trim(str_ireplace('Missing WC attribute terms:', '', $error_message));
+            $terms_fa   = self::translate_attribute_term_list($terms_part);
+
+            if ($terms_fa !== '') {
+                return 'مقادیر ویژگی در ووکامرس پیدا نشد: ' . $terms_fa;
+            }
+        }
+
+        if ($error_code === 'sai_term_create_failed' && $error_message !== '') {
+            return 'ساخت مقدار ویژگی در ووکامرس ناموفق بود: ' . $error_message;
+        }
+
+        return $reason_fa;
+    }
+
     private static function map_reason_fa(string $error_code, string $error_message): string
     {
+        $suffix = self::extract_message_suffix($error_message);
+
         switch ($error_code) {
             case 'sai_missing_wc_attribute_term':
-                return 'attribute رنگ/سایز در ووکامرس پیدا نشد';
+                return 'نبود مقدار ویژگی رنگ یا سایز در ووکامرس';
             case 'sai_invalid_variation_item':
                 if (stripos($error_message, 'Missing variation SKU') !== false) {
-                    return 'کد محصول (SKU) خالی است';
+                    return 'خالی بودن کد محصول برای نسخهٔ متغیر';
                 }
-                return 'اطلاعات variation ناقص است';
+                if (stripos($error_message, 'Missing variation attributes') !== false) {
+                    return 'نداشتن ویژگی رنگ یا سایز برای نسخهٔ متغیر';
+                }
+                return 'ناقص بودن اطلاعات نسخهٔ متغیر';
             case 'sai_variation_sku_conflict':
-                return 'SKU متعلق به محصول غیر variation است';
+                return $suffix !== ''
+                    ? 'اختصاص کد «' . $suffix . '» به محصولی غیر از نسخهٔ متغیر'
+                    : 'اختصاص کد محصول به محصولی غیر از نسخهٔ متغیر';
             case 'sai_simple_sku_conflict':
-                return 'SKU قبلاً به variation اختصاص دارد';
+                return $suffix !== ''
+                    ? 'اختصاص کد «' . $suffix . '» قبلاً به یک نسخهٔ متغیر'
+                    : 'اختصاص کد محصول قبلاً به یک نسخهٔ متغیر';
+            case 'sai_sku_conflict':
+                return $suffix !== ''
+                    ? 'اختصاص کد «' . $suffix . '» به محصول دیگری'
+                    : 'تعارض کد محصول با محصول دیگر';
             case 'sai_invalid_variable_group':
-                return 'گروه متغیر نامعتبر است';
+                return 'نامعتبر بودن گروه محصول متغیر';
             case 'sai_invalid_parent_product':
-                return 'بارگذاری محصول والد ناموفق بود';
+                if (stripos($error_message, 'simple conversion') !== false) {
+                    return 'بارگذاری محصول متغیر برای تبدیل به ساده ناموفق بود';
+                }
+                return 'بارگذاری محصول والد متغیر ناموفق بود';
             case 'sai_parent_sku_conflict':
-                return 'SKU والد متعلق به محصول غیر متغیر است';
+                return $suffix !== ''
+                    ? 'اختصاص کد والد «' . $suffix . '» به محصول غیر متغیر'
+                    : 'اختصاص کد والد به محصول غیر متغیر';
             case 'sai_invalid_variable_attributes':
-                return 'ویژگی‌های محصول متغیر معتبر نیست';
+                return 'نداشتن ویژگی معتبر برای محصول متغیر';
             case 'sai_missing_code':
-                return 'کد محصول (GoodCode) خالی است';
+                return 'خالی بودن کد محصول (GoodCode)';
             case 'sai_invalid_product':
-                return 'بارگذاری محصول simple ناموفق بود';
+                if (stripos($error_message, 'variable to simple conversion') !== false) {
+                    return 'بارگذاری محصول پس از تبدیل متغیر به ساده ناموفق بود';
+                }
+                if (stripos($error_message, 'reload product after variable to simple conversion') !== false) {
+                    return 'بارگذاری مجدد محصول پس از تبدیل متغیر به ساده ناموفق بود';
+                }
+                return 'بارگذاری محصول ساده ناموفق بود';
             case 'sai_invalid_simple_job':
-                return 'ساختار job محصول simple نامعتبر است';
+                return 'ساختار دستهٔ همگام‌سازی محصول ساده نامعتبر است';
             case 'sai_invalid_variation_job':
-                return 'ساختار job variation نامعتبر است';
+                return 'ساختار دستهٔ همگام‌سازی نسخهٔ متغیر نامعتبر است';
             case 'sai_invalid_import_job':
-                return 'ساختار job import نامعتبر است';
+                return 'ساختار دستهٔ همگام‌سازی نامعتبر است';
+            case 'sai_invalid_variation':
+                if (stripos($error_message, 'simple conversion') !== false) {
+                    return 'بارگذاری نسخهٔ متغیر برای تبدیل به ساده ناموفق بود';
+                }
+                return 'بارگذاری نسخهٔ متغیر ناموفق بود';
             case 'sai_term_create_failed':
-                return 'ساخت term ویژگی در ووکامرس ناموفق بود';
+                return 'ساخت مقدار ویژگی در ووکامرس ناموفق بود';
             case 'sai_product_in_trash':
-                return 'محصول در سطل زباله است و همگام‌سازی آن را منتشر نمی‌کند';
+                return $suffix !== ''
+                    ? 'قرار داشتن محصول «' . $suffix . '» در سطل زباله (همگام‌سازی انجام نشد)'
+                    : 'قرار داشتن محصول در سطل زباله (همگام‌سازی انجام نشد)';
+            case 'sai_simple_create_failed':
+                return $suffix !== ''
+                    ? 'ساخت محصول ساده با کد «' . $suffix . '» ناموفق بود'
+                    : 'ساخت محصول ساده ناموفق بود';
             case 'sai_manual_action_required':
-                return 'نیاز به اقدام دستی — محصول باید از متغیر به ساده تبدیل شود';
+                return 'نیاز به اقدام دستی برای تبدیل محصول متغیر به ساده';
+            case 'sai_invalid_attribute':
+                return $suffix !== ''
+                    ? 'پشتیبانی نشدن ویژگی «' . $suffix . '»'
+                    : 'ویژگی پشتیبانی‌نشده';
+            case 'sai_wc_missing':
+                return 'در دسترس نبودن API ویژگی‌های ووکامرس';
+            case 'sai_empty_attribute_term':
+                return 'خالی بودن نام یا مقدار ویژگی';
+            case 'sai_no_cache':
+                return 'پیدا نشدن یا خالی بودن فایل کش';
+            case 'sai_invalid_response':
+                return 'نامعتبر بودن پاسخ API';
+            case 'sai_json_encode_failed':
+                return 'خطا در ذخیرهٔ JSON محصولات';
+            case 'sai_cache_write_failed':
+                return 'خطا در نوشتن فایل کش';
             default:
                 return 'خطای همگام‌سازی';
         }

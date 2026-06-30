@@ -1992,6 +1992,89 @@ class SAI_Woo_Integration
         $product->set_stock_status($qty > 0 ? 'instock' : 'outofstock');
     }
 
+    private function remove_sai_parent_meta($product): void
+    {
+        $product->delete_meta_data('_sai_is_parent');
+        $product->delete_meta_data('_sai_base_name');
+        $product->delete_meta_data('_sai_variation_attributes');
+        $product->delete_meta_data('_sai_parent_anchor_goodcode');
+        $product->delete_meta_data('_sai_replaced_by_variation');
+        $product->delete_meta_data('_sai_replaced_at');
+    }
+
+    private function apply_simple_item_fields($product, array $item): void
+    {
+        $good_code = isset($item['GoodCode']) ? sanitize_text_field($item['GoodCode']) : '';
+        $good_name = isset($item['GoodName']) ? sanitize_text_field($item['GoodName']) : '';
+
+        $display_name = $good_name !== '' ? $good_name : $good_code;
+        $product->set_name($display_name);
+        $this->sync_product_slug_from_name($product, $display_name);
+
+        $this->apply_price_data($product, $item);
+        $this->apply_stock_data($product, $item);
+
+        $this->apply_group_category($product, isset($item['GoodGroupName']) ? sanitize_text_field($item['GoodGroupName']) : '');
+
+        $product->update_meta_data('_sai_good_id', isset($item['GoodId']) ? sanitize_text_field($item['GoodId']) : '');
+        $product->update_meta_data('_sai_good_code', $good_code);
+        $product->update_meta_data('_sai_original_name', $good_name);
+        $product->update_meta_data('_sai_group_code', isset($item['GoodGroupCode']) ? sanitize_text_field($item['GoodGroupCode']) : '');
+        $product->update_meta_data('_sai_group_name', isset($item['GoodGroupName']) ? sanitize_text_field($item['GoodGroupName']) : '');
+        $product->update_meta_data('_sai_unit_name', isset($item['UnitName']) ? sanitize_text_field($item['UnitName']) : '');
+        $product->update_meta_data('_sai_no_entry_inv', isset($item['NoEntryInv']) ? sanitize_text_field($item['NoEntryInv']) : '');
+
+        $this->remove_sai_parent_meta($product);
+    }
+
+    private function trash_variable_parent_if_empty(int $parent_id): void
+    {
+        if ($parent_id <= 0) {
+            return;
+        }
+
+        $parent = wc_get_product($parent_id);
+
+        if (!$parent || !$parent->is_type('variable')) {
+            return;
+        }
+
+        if ($parent->get_children() !== []) {
+            return;
+        }
+
+        wp_trash_post($parent_id);
+        error_log('[SAI_SYNC] Trashed empty variable parent ID=' . $parent_id);
+    }
+
+    private function clear_variable_product_meta(int $product_id): void
+    {
+        delete_post_meta($product_id, '_product_attributes');
+        delete_post_meta($product_id, '_default_attributes');
+    }
+
+    /**
+     * Load a simple product after product_type taxonomy changes (avoids WC factory Variable cache).
+     */
+    private function load_simple_product(int $product_id): ?WC_Product_Simple
+    {
+        if ($product_id <= 0) {
+            return null;
+        }
+
+        clean_post_cache($product_id);
+        wc_delete_product_transients($product_id);
+        $this->clear_variable_product_meta($product_id);
+
+        $product = new WC_Product_Simple($product_id);
+
+        if ($product->get_id() <= 0 || !$product->is_type('simple')) {
+            return null;
+        }
+
+        return $product;
+    }
+
     private function process_single_greenware_item($item)
     {
         $good_code = isset($item['GoodCode']) ? sanitize_text_field($item['GoodCode']) : '';
@@ -2044,7 +2127,31 @@ class SAI_Woo_Integration
             }
 
             if ($product->is_type('variation')) {
-                return new WP_Error('sai_simple_sku_conflict', 'Simple product SKU already belongs to a variation: ' . $good_code);
+                $converted = $this->detach_variation_and_make_simple(
+                    (int) $product_id,
+                    (int) $product->get_parent_id(),
+                    $item
+                );
+
+                if (is_wp_error($converted)) {
+                    return $converted;
+                }
+
+                error_log('[SAI_SYNC] UPDATED: SKU=' . $good_code . ' | Name=' . $good_name . ' (detached variation)');
+
+                return 'updated';
+            }
+
+            if ($product->is_type('variable')) {
+                $converted = $this->convert_variable_to_simple((int) $product_id, $item);
+
+                if (is_wp_error($converted)) {
+                    return $converted;
+                }
+
+                error_log('[SAI_SYNC] UPDATED: SKU=' . $good_code . ' | Name=' . $good_name . ' (converted variable)');
+
+                return 'updated';
             }
 
             if ($product->get_sku() !== $good_code) {
@@ -2068,22 +2175,7 @@ class SAI_Woo_Integration
             $result_type = 'created';
         }
 
-        $display_name = $good_name !== '' ? $good_name : $good_code;
-        $product->set_name($display_name);
-        $this->sync_product_slug_from_name($product, $display_name);
-
-        $this->apply_price_data($product, $item);
-        $this->apply_stock_data($product, $item);
-
-        $this->apply_group_category($product, isset($item['GoodGroupName']) ? sanitize_text_field($item['GoodGroupName']) : '');
-
-        $product->update_meta_data('_sai_good_id', isset($item['GoodId']) ? sanitize_text_field($item['GoodId']) : '');
-        $product->update_meta_data('_sai_good_code', $good_code);
-        $product->update_meta_data('_sai_original_name', $good_name);
-        $product->update_meta_data('_sai_group_code', isset($item['GoodGroupCode']) ? sanitize_text_field($item['GoodGroupCode']) : '');
-        $product->update_meta_data('_sai_group_name', isset($item['GoodGroupName']) ? sanitize_text_field($item['GoodGroupName']) : '');
-        $product->update_meta_data('_sai_unit_name', isset($item['UnitName']) ? sanitize_text_field($item['UnitName']) : '');
-        $product->update_meta_data('_sai_no_entry_inv', isset($item['NoEntryInv']) ? sanitize_text_field($item['NoEntryInv']) : '');
+        $this->apply_simple_item_fields($product, $item);
 
         $product->save();
 
@@ -2181,7 +2273,7 @@ class SAI_Woo_Integration
                 $result = $this->detach_variation_and_make_simple($product_id, $parent_id, $item);
 
                 if (is_wp_error($result)) {
-                    $errors[] = 'SKU ' . $good_code . ': ' . $result->get_error_message();
+                    $errors[] = SAI_Sync_Skip_Log::format_product_error_fa($good_code, $result);
                     continue;
                 }
 
@@ -2194,7 +2286,7 @@ class SAI_Woo_Integration
                 $result = $this->convert_variable_to_simple($product_id, $item);
 
                 if (is_wp_error($result)) {
-                    $errors[] = 'SKU ' . $good_code . ': ' . $result->get_error_message();
+                    $errors[] = SAI_Sync_Skip_Log::format_product_error_fa($good_code, $result);
                     continue;
                 }
 
@@ -2203,7 +2295,7 @@ class SAI_Woo_Integration
             }
 
             // Any other type (grouped etc.) — just log and skip
-            $errors[] = 'SKU ' . $good_code . ': unsupported product type ' . $product->get_type();
+            $errors[] = 'کد ' . $good_code . ': نوع محصول پشتیبانی نمی‌شود (' . $product->get_type() . ')';
         }
 
         error_log('[SAI_SYNC] force_simple finished | fixed=' . $fixed . ' | skipped=' . $skipped . ' | errors=' . count($errors));
@@ -2219,54 +2311,130 @@ class SAI_Woo_Integration
      * Detach a variation from its parent and re-create it as a standalone simple product.
      * If the parent has no remaining variations after detach, the parent is trashed.
      *
-     * @return true|WP_Error
+     * @return int|WP_Error New simple product ID
      */
     private function detach_variation_and_make_simple(int $variation_id, int $parent_id, array $item)
     {
         $good_code = isset($item['GoodCode']) ? sanitize_text_field($item['GoodCode']) : '';
         $good_name = isset($item['GoodName']) ? sanitize_text_field($item['GoodName']) : $good_code;
 
-        $parent_sku = '';
-        if ($parent_id > 0) {
-            $parent     = wc_get_product($parent_id);
-            $parent_sku = $parent ? sanitize_text_field($parent->get_sku()) : '';
+        if ($good_code === '') {
+            return new WP_Error('sai_missing_code', 'Missing GoodCode');
         }
 
-        $message = sprintf(
-            'محصول "%s" (GoodCode=%s) در ووکامرس به‌عنوان variation ثبت شده (variation ID=%d، parent ID=%d، parent SKU=%s). این محصول باید ساده (simple) باشد. لطفاً به‌صورت دستی: ۱) SKU parent را به %s تغییر دهید ۲) variationها را حذف کنید ۳) attributeها را پاک کنید ۴) نوع محصول را به Simple تغییر دهید و ذخیره کنید.',
-            $good_name,
-            $good_code,
-            $variation_id,
-            $parent_id,
-            $parent_sku,
-            $good_code
+        $variation = wc_get_product($variation_id);
+
+        if (!$variation || !$variation->is_type('variation')) {
+            return new WP_Error('sai_invalid_variation', 'Could not load variation for simple conversion');
+        }
+
+        $trash_error = $this->reject_if_product_in_trash($variation);
+
+        if ($trash_error instanceof WP_Error) {
+            return $trash_error;
+        }
+
+        $existing_simple_id = $this->find_product_id_by_sku($good_code);
+
+        if ($existing_simple_id && (int) $existing_simple_id !== $variation_id) {
+            $existing = wc_get_product($existing_simple_id);
+
+            if ($existing && $existing->is_type('simple')) {
+                return (int) $existing_simple_id;
+            }
+
+            return new WP_Error(
+                'sai_sku_conflict',
+                'Cannot create simple product because SKU already belongs to another product: ' . $good_code
+            );
+        }
+
+        wp_delete_post($variation_id, true);
+        $this->trash_variable_parent_if_empty($parent_id);
+
+        $product = new WC_Product_Simple();
+        $product->set_sku($good_code);
+        $product->set_status('publish');
+        $this->apply_simple_item_fields($product, $item);
+
+        $new_id = (int) $product->save();
+
+        if ($new_id <= 0) {
+            return new WP_Error('sai_simple_create_failed', 'Failed to create simple product for SKU: ' . $good_code);
+        }
+
+        error_log(
+            '[SAI_SYNC] Detached variation and created simple: SKU=' . $good_code .
+                ' | Name=' . $good_name .
+                ' | NewID=' . $new_id .
+                ' | OldVariationID=' . $variation_id
         );
 
-        error_log('[SAI_SYNC] MANUAL ACTION REQUIRED: ' . $message);
-
-        return new WP_Error('sai_manual_action_required', $message);
+        return $new_id;
     }
 
+    /**
+     * @return int|WP_Error Converted simple product ID
+     */
     private function convert_variable_to_simple(int $product_id, array $item)
     {
         $good_code = isset($item['GoodCode']) ? sanitize_text_field($item['GoodCode']) : '';
         $good_name = isset($item['GoodName']) ? sanitize_text_field($item['GoodName']) : $good_code;
 
-        $product    = wc_get_product($product_id);
-        $parent_sku = $product ? sanitize_text_field($product->get_sku()) : '';
+        if ($good_code === '') {
+            return new WP_Error('sai_missing_code', 'Missing GoodCode');
+        }
 
-        $message = sprintf(
-            'محصول "%s" (GoodCode=%s) در ووکامرس به‌عنوان variable ثبت شده (product ID=%d، SKU=%s). این محصول باید ساده (simple) باشد. لطفاً به‌صورت دستی: ۱) SKU را به %s تغییر دهید ۲) variationها را حذف کنید ۳) attributeها را پاک کنید ۴) نوع محصول را به Simple تغییر دهید و ذخیره کنید.',
-            $good_name,
-            $good_code,
-            $product_id,
-            $parent_sku,
-            $good_code
+        $product = wc_get_product($product_id);
+
+        if (!$product || !$product->is_type('variable')) {
+            return new WP_Error('sai_invalid_parent_product', 'Could not load variable product for simple conversion');
+        }
+
+        $trash_error = $this->reject_if_product_in_trash($product);
+
+        if ($trash_error instanceof WP_Error) {
+            return $trash_error;
+        }
+
+        $sku_owner_id = $this->find_product_id_by_sku($good_code);
+
+        if ($sku_owner_id && (int) $sku_owner_id !== $product_id) {
+            return new WP_Error(
+                'sai_sku_conflict',
+                'Cannot set SKU because it already belongs to another product: ' . $good_code
+            );
+        }
+
+        foreach ($product->get_children() as $child_id) {
+            wp_delete_post((int) $child_id, true);
+        }
+
+        wp_remove_object_terms($product_id, 'variable', 'product_type');
+        wp_set_object_terms($product_id, 'simple', 'product_type', false);
+        $this->clear_variable_product_meta($product_id);
+
+        $product = $this->load_simple_product($product_id);
+
+        if (!$product) {
+            return new WP_Error('sai_invalid_product', 'Could not reload product after variable to simple conversion');
+        }
+
+        $product->set_attributes([]);
+        $product->set_sku($good_code);
+        $product->set_status('publish');
+        $this->apply_simple_item_fields($product, $item);
+
+        $saved_id = (int) $product->save();
+        wc_delete_product_transients($saved_id);
+
+        error_log(
+            '[SAI_SYNC] Converted variable to simple: SKU=' . $good_code .
+                ' | Name=' . $good_name .
+                ' | ID=' . $saved_id
         );
 
-        error_log('[SAI_SYNC] MANUAL ACTION REQUIRED: ' . $message);
-
-        return new WP_Error('sai_manual_action_required', $message);
+        return $saved_id;
     }
 
     /**
@@ -2402,7 +2570,7 @@ class SAI_Woo_Integration
             $result = $this->create_or_update_variation((int) $parent_id, $variation_item);
 
             if (is_wp_error($result)) {
-                $errors[] = 'SKU ' . $good_code . ': ' . $result->get_error_message();
+                $errors[] = SAI_Sync_Skip_Log::format_product_error_fa($good_code, $result);
                 continue;
             }
 

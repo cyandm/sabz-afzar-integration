@@ -129,6 +129,13 @@ class SAI_Admin_Handler
             if (is_wp_error($cache)) {
                 wp_send_json_error(['message' => $cache->get_error_message()]);
             }
+
+            $force_result = $woo->force_simple_products_from_cache();
+            $manual_action_needed = count($force_result['errors'] ?? []);
+
+            if ($manual_action_needed > 0) {
+                error_log("[SAI_SYNC] $manual_action_needed product(s) need manual action (variable → simple).");
+            }
         }
 
         $result = $woo->sync_products_from_greenware_batch($offset, $limit);
